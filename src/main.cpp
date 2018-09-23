@@ -1,4 +1,5 @@
 #include "polyscope/polyscope.h"
+#include "polyscope/overlap.h"
 
 #include <iostream>
 
@@ -6,6 +7,7 @@
 #include "geometrycentral/halfedge_mesh.h"
 #include "geometrycentral/polygon_soup_mesh.h"
 #include "geometrycentral/direction_fields.h"
+#include "geometrycentral/distortion.h"
 
 #include "imgui.h"
 #include "args/args.hxx"
@@ -103,6 +105,30 @@ int main(int argc, char** argv) {
   std::string meshNiceName = polyscope::utilities::guessNiceNameFromPath(args::get(inFileName));
   polyscope::registerSurfaceMesh(meshNiceName, geom);
 
+  // == Add Distortion Data to Mesh 
+  {
+    // Area Distortion
+    Vector3 areaDistortion = Distortion::computeAreaScaling(mesh, geom);
+    std::cout << "AREA DISTORTION: min: " << areaDistortion[0] << " max: " << areaDistortion[1] << " avg: " << areaDistortion[2] << std::endl;
+    polyscope::getSurfaceMesh()->addQuantity("Area Distortion", Distortion::areaDistortion);
+
+    // Angle Distortion
+    Vector3 angleDistortion = Distortion::computeQuasiConformalError(mesh, geom);
+    std::cout << "ANGLE DISTORTION: min: " << angleDistortion[0] << " max: " << angleDistortion[1] << " avg: " << angleDistortion[2] << std::endl;
+    polyscope::getSurfaceMesh()->addQuantity("Angle Distortion", Distortion::angleDistortion);
+
+    // Triangles flipped
+    size_t trianglesFlipped = Distortion::computeTriangleFlips(mesh, geom);
+    std::cout << "TRIANGLES FLIPPED: " << trianglesFlipped << std::endl;
+    polyscope::getSurfaceMesh()->addQuantity("Flipped Triangles", Distortion::trianglesFlipped);
+    
+    // Global Overlap
+    bool globalOverlap = Distortion::computeGlobalOverlap(mesh, geom);
+    std::cout << "GLOBAL OVERLAP: " << globalOverlap << std::endl;
+  }
+
+  polyscope::Overlap* w = new polyscope::Overlap(mesh, geom);
+
   // == Add some data to the mesh we just created
   // Note: Since the viewer only currently only has one mesh, we can omit the mesh name field
   //       from these commands -- otherwise a correct name must be specified to getSurfaceMesh()
@@ -140,14 +166,14 @@ int main(int argc, char** argv) {
       polyscope::getSurfaceMesh()->addVectorQuantity("smoothest 4-field", smoothestField, 4);
     }
   }
-
+/*
   // == Create a point cloud
   std::vector<Vector3> points;
   for (size_t i = 0; i < 50; i++) {
     points.push_back(3 * Vector3{unitRand() - .5, unitRand() - .5, unitRand() - .5});
   }
   polyscope::registerPointCloud("sample_points", points);
-
+*/
 
   // Register the user callback 
   polyscope::state::userCallback = myCallback;
