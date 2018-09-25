@@ -128,6 +128,7 @@ int main(int argc, char** argv) {
   }
 
   polyscope::Overlap* w = new polyscope::Overlap(mesh, geom);
+  w->renderToTexture();
 
   // == Add some data to the mesh we just created
   // Note: Since the viewer only currently only has one mesh, we can omit the mesh name field

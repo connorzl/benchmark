@@ -6,17 +6,13 @@
 
 namespace polyscope {
 
-// A histogram that shows up in ImGUI
 class Overlap {
 public:
   Overlap(HalfedgeMesh* mesh, Geometry<Euclidean>* geom);
   ~Overlap();
 
-  // Width = -1 means set automatically
-  void buildUI(float width=-1.0);
-
-  float colormapRangeMin, colormapRangeMax; // in DATA values, not [0,1]
-
+  void renderToTexture();
+  
 private:
   // Manage boundary vertices
   void fillBuffers();
@@ -24,8 +20,6 @@ private:
   HalfedgeMesh* mesh;
   Geometry<Euclidean>* geom;
   
-  // Render to texture
-  void renderToTexture();
   void prepare();
   bool prepared = false;
   void unprepare();
