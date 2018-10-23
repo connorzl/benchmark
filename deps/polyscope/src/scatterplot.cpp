@@ -100,7 +100,7 @@ void Scatterplot::prepare() {
   if (prepared) {
     unprepare();
   }
-
+  
   // Generate a framebuffer to hold our texture
   glGenFramebuffers(1, &framebufferInd);
   glBindFramebuffer(GL_FRAMEBUFFER, framebufferInd);
@@ -233,7 +233,7 @@ void Scatterplot::buildUI(float width) {
 
   // Slider for point radius
   float prevRadius = radius;
-  ImGui::SliderFloat("Radius", &radius, 0.01, .075, "%.5f", 1.);
+  ImGui::SliderFloat("Point Radius", &radius, 0.01, .075, "%.5f", 1.);
   radiusChanged = (radius != prevRadius);
 }
 

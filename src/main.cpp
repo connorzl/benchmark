@@ -14,6 +14,9 @@
 #include "imgui.h"
 #include "args/args.hxx"
 
+#include "polyscope/scatterplot.h"
+#include "polyscope/gl/colormap_sets.h"
+
 using namespace geometrycentral;
 using std::cerr;
 using std::cout;
@@ -24,6 +27,8 @@ using std::string;
 // (in general, such data should probably be stored in a class, or whatever makes sense for your situation -- these globals are just for the sake of a simple example app)
 Geometry<Euclidean>* geom;
 HalfedgeMesh* mesh;
+polyscope::Scatterplot* scatter;
+int iColorMap = 0;
 
 // Parameters 
 size_t iGeneratedPoints = 0;
@@ -37,8 +42,10 @@ void myCallback() {
 
   // Begin an ImGUI window
   static bool showGui = true;
-  ImGui::Begin("Sample UI", &showGui, ImGuiWindowFlags_AlwaysAutoResize);
+
+  ImGui::Begin("Sample Scatterplot", &showGui); //ImGuiWindowFlags_AlwaysAutoResize);
   ImGui::PushItemWidth(100);
+  /*
 
   // Generate a random function
   ImGui::TextUnformatted("Generate random function:");
@@ -70,6 +77,22 @@ void myCallback() {
 
     polyscope::warning("Na na na na na na na na na na na na na Batman!");
   }
+  ImGui::Separator();
+  */
+
+   // Set colormap
+  ImGui::SameLine();
+  ImGui::PushItemWidth(100);
+  (*scatter).updateColormap(polyscope::gl::quantitativeColormaps[iColorMap]);
+  int iColormapBefore = iColorMap;
+  ImGui::Combo("##colormap", &iColorMap, polyscope::gl::quantitativeColormapNames,
+                IM_ARRAYSIZE(polyscope::gl::quantitativeColormapNames));
+  ImGui::PopItemWidth();
+  if (iColorMap != iColormapBefore) {
+    (*scatter).updateColormap(polyscope::gl::quantitativeColormaps[iColorMap]);
+  }
+
+  (*scatter).buildUI();
 
   // Cleanup the ImGUI window
   ImGui::PopItemWidth();
@@ -265,7 +288,16 @@ int main(int argc, char** argv) {
 
     // Register the user callback 
     polyscope::state::userCallback = myCallback;
-
+    
+    scatter = new polyscope::Scatterplot();
+    std::vector<double> xs;
+    std::vector<double> ys;
+    for (int i = 0; i < 100; i++) {
+      xs.push_back(3 * unitRand() - .5);
+      ys.push_back(3 * unitRand() - .5);
+    }
+    (*scatter).buildScatterplot(xs, ys);
+    
     // Give control to the polyscope gui
     polyscope::show();
   }
