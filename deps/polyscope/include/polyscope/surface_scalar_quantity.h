@@ -5,6 +5,8 @@
 #include "polyscope/histogram.h"
 #include "polyscope/gl/colormap_sets.h"
 
+#include "polyscope/scatterplot.h"
+
 namespace polyscope {
 
 class SurfaceScalarQuantity : public SurfaceQuantityThatDrawsFaces {
@@ -26,6 +28,7 @@ protected:
   float vizRangeLow, vizRangeHigh;
   float dataRangeHigh, dataRangeLow;
   Histogram hist;
+  Scatterplot scatter;
 
   // UI internals
   int iColorMap = 0;

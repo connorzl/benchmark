@@ -1,7 +1,9 @@
 #include "polyscope/polyscope.h"
-#include "polyscope/overlap.h"
+//#include "polyscope/overlap.h"
 
 #include <iostream>
+#include <fstream> 
+#include <iomanip>
 
 #include "geometrycentral/geometry.h"
 #include "geometrycentral/halfedge_mesh.h"
@@ -65,6 +67,7 @@ void myCallback() {
   ImGui::Separator();
 
   if (ImGui::Button("Batman")) {
+
     polyscope::warning("Na na na na na na na na na na na na na Batman!");
   }
 
@@ -73,114 +76,199 @@ void myCallback() {
   ImGui::End();
 }
 
+void writeToFile(std::ofstream &outfile, std::string path, Vector3 areaDistortion, Vector3 angleDistortion, 
+                 size_t trianglesFlipped, bool globalOverlap) {
+  std::size_t start = path.find_last_of('/');
+  std::size_t end = path.find_last_of('.');
+  std::string fileName = path.substr(start+1, end-start-1);
+
+  std::ostringstream area;
+  area << areaDistortion[0] << "," << areaDistortion[1] << "," << areaDistortion[2];
+
+  std::ostringstream angle;
+  angle << angleDistortion[0] << "," << angleDistortion[1] << "," << angleDistortion[2];
+  
+  outfile << std::setw(20) << std::left << fileName;
+  outfile << std::setw(35) << std::left << area.str();
+  outfile << std::setw(35) << std::left << angle.str();
+  outfile << std::setw(25) << std::left << trianglesFlipped;
+  outfile << std::setw(25) << std::left << globalOverlap << std::endl;
+}
+
 int main(int argc, char** argv) {
-
-  // Configure the argument parser
-  args::ArgumentParser parser("Polyscope sample program. See github.com/nmwsharp/polyscope/examples.");
-  args::Positional<string> inFileName(parser, "input_file", "An .obj file to visualize");
-
-  // Parse args
-  try {
-    parser.ParseCLI(argc, argv);
-  } catch (args::Help) {
-    std::cout << parser;
-    return 0;
-  } catch (args::ParseError e) {
-    std::cerr << e.what() << std::endl;
-    std::cerr << parser;
-    return 1;
-  }
-
-  // Make sure a mesh name was given
-  if(args::get(inFileName) == "") {
-    std::cerr << "Please specify .obj file as argument" << std::endl;
-    return EXIT_FAILURE;
-  }
-
-  // Initialize polyscope
-  polyscope::init();
-
-  // == Build the mesh object from the input file
-  mesh = new HalfedgeMesh(PolygonSoupMesh(args::get(inFileName)), geom);
-  std::string meshNiceName = polyscope::utilities::guessNiceNameFromPath(args::get(inFileName));
-  polyscope::registerSurfaceMesh(meshNiceName, geom);
-
-  // == Add Distortion Data to Mesh 
-  {
-    // Area Distortion
-    Vector3 areaDistortion = Distortion::computeAreaScaling(mesh, geom);
-    std::cout << "AREA DISTORTION: min: " << areaDistortion[0] << " max: " << areaDistortion[1] << " avg: " << areaDistortion[2] << std::endl;
-    polyscope::getSurfaceMesh()->addQuantity("Area Distortion", Distortion::areaDistortion);
-
-    // Angle Distortion
-    Vector3 angleDistortion = Distortion::computeQuasiConformalError(mesh, geom);
-    std::cout << "ANGLE DISTORTION: min: " << angleDistortion[0] << " max: " << angleDistortion[1] << " avg: " << angleDistortion[2] << std::endl;
-    polyscope::getSurfaceMesh()->addQuantity("Angle Distortion", Distortion::angleDistortion);
-
-    // Triangles flipped
-    size_t trianglesFlipped = Distortion::computeTriangleFlips(mesh, geom);
-    std::cout << "TRIANGLES FLIPPED: " << trianglesFlipped << std::endl;
-    polyscope::getSurfaceMesh()->addQuantity("Flipped Triangles", Distortion::trianglesFlipped);
-    
-    // Global Overlap
-    bool globalOverlap = Distortion::computeGlobalOverlap(mesh, geom);
-    std::cout << "GLOBAL OVERLAP: " << globalOverlap << std::endl;
-  }
-
-  polyscope::Overlap* w = new polyscope::Overlap(mesh, geom);
-  w->renderToTexture();
-
-  // == Add some data to the mesh we just created
-  // Note: Since the viewer only currently only has one mesh, we can omit the mesh name field
-  //       from these commands -- otherwise a correct name must be specified to getSurfaceMesh()
-  {
-    // Two function on vertices (x coord and a random color)
-    VertexData<double> valX(mesh);
-    VertexData<Vector3> randColor(mesh);
-    for (VertexPtr v : mesh->vertices()) {
-      valX[v] = geom->position(v).x;
-      randColor[v] = Vector3{unitRand(), unitRand(), unitRand()};
+  bool ANALYZE_DIR = false;
+  std::vector<std::string> objFiles;
+  if (strcmp(argv[1],"-a") == 0) {
+    ANALYZE_DIR = true;
+    for (int i = 2; i < argc; i++) {
+      objFiles.push_back(argv[i]);
     }
-    polyscope::getSurfaceMesh()->addQuantity("x coord", valX);
-    polyscope::getSurfaceMesh()->addColorQuantity("random color", randColor);
+  } 
 
-    // Face area
-    FaceData<double> fArea(mesh);
-    for (FacePtr f : mesh->faces()) {
-      fArea[f] = geom->area(f);
+  if (ANALYZE_DIR) {
+
+    /*
+    // Initialize polyscope
+    polyscope::init();
+
+    std::ofstream outfile ("analysis.txt");
+    outfile << std::setw(20) << std::left << "File" 
+              << std::setw(35) << std::left << "Area Distortion (Min,Max,Avg)" 
+              << std::setw(35) << std::left << "Angle Distortion (Min,Max,Avg)" 
+              << std::setw(25) << std::left << "Triangles Flipped"
+              << std::setw(25) << std::left << "Global Overlap"
+              << std::endl;
+
+    std::vector<Vector3> areaDistortionPoints;
+    std::vector<std::string> meshNames;
+    for (size_t i = 0; i < objFiles.size(); i++) {
+      mesh = new HalfedgeMesh(PolygonSoupMesh(objFiles[i]), geom);
+      if (geom->paramCoords.size() == 0) continue;
+      
+      std::string meshNiceName = polyscope::utilities::guessNiceNameFromPath(objFiles[i]);
+      polyscope::registerSurfaceMesh(meshNiceName, geom);
+      Distortion* d = new Distortion(mesh, geom);
+      meshNames.push_back(meshNiceName);
+
+      // Area Distortion
+      Vector3 areaDistortion = d->computeAreaScaling();
+      std::cout << "AREA DISTORTION: min: " << areaDistortion[0] << " max: " << areaDistortion[1] << " avg: " << areaDistortion[2] << std::endl;
+      polyscope::getSurfaceMesh(meshNiceName)->addQuantity("Area Distortion", d->areaDistortion);
+      areaDistortionPoints.push_back(areaDistortion);
+
+      // Angle Distortion
+      Vector3 angleDistortion = d->computeQuasiConformalError();
+      std::cout << "ANGLE DISTORTION: min: " << angleDistortion[0] << " max: " << angleDistortion[1] << " avg: " << angleDistortion[2] << std::endl;
+      polyscope::getSurfaceMesh(meshNiceName)->addQuantity("Angle Distortion", d->angleDistortion);
+
+      // Triangles flipped
+      size_t trianglesFlipped = d->computeTriangleFlips();
+      std::cout << "TRIANGLES FLIPPED: " << trianglesFlipped << std::endl;
+      polyscope::getSurfaceMesh(meshNiceName)->addQuantity("Flipped Triangles", d->trianglesFlipped);
+      
+      // Global Overlap
+      bool globalOverlap = d->computeGlobalOverlap();
+      std::cout << "GLOBAL OVERLAP: " << globalOverlap << std::endl;
+
+      // Total Seam Length
+      size_t seamLength = d->computeSeamLength();
+      std::cout << "TOTAL SEAM LENGTH: " << seamLength << std::endl;
     }
-    polyscope::getSurfaceMesh()->addQuantity("face area", fArea, polyscope::DataType::MAGNITUDE);
+    outfile.close();
 
-    // Edge cotan weights
-    EdgeData<double> cWeight(mesh);
-    geom->getEdgeCotanWeights(cWeight);
-    polyscope::getSurfaceMesh()->addQuantity("cotan weight", cWeight, polyscope::DataType::SYMMETRIC);
- 
-    // Vertex normals
-    VertexData<Vector3> normals(mesh);
-    geom->getVertexNormals(normals);
-    polyscope::getSurfaceMesh()->addVectorQuantity("vertex normals", normals);
+    // Register the user callback 
+    polyscope::state::userCallback = myCallback;
 
-    // Smoothest 4-symmetric direction field
-    if(mesh->nBoundaryLoops() == 0) { // (haven't implemented for boundary yet...)
-      FaceData<Complex> smoothestField = computeSmoothestFaceDirectionField(geom, 4, true);
-      polyscope::getSurfaceMesh()->addVectorQuantity("smoothest 4-field", smoothestField, 4);
+    // Give control to the polyscope gui
+    polyscope::show();
+    */
+  } else {
+
+    // Configure the argument parser
+    args::ArgumentParser parser("Polyscope sample program. See github.com/nmwsharp/polyscope/examples.");
+    args::Positional<string> inFileName(parser, "input_file", "An .obj file to visualize");
+
+    // Parse args
+    try {
+      parser.ParseCLI(argc, argv);
+    } catch (args::Help) {
+      std::cout << parser;
+      return 0;
+    } catch (args::ParseError e) {
+      std::cerr << e.what() << std::endl;
+      std::cerr << parser;
+      return 1;
     }
-  }
+
+    // Make sure a mesh name was given
+    if(args::get(inFileName) == "") {
+      std::cerr << "Please specify .obj file as argument" << std::endl;
+      return EXIT_FAILURE;
+    }
+
+    // Initialize polyscope
+    polyscope::init();
+  
+    // == Build the mesh object from the input file
+    mesh = new HalfedgeMesh(PolygonSoupMesh(args::get(inFileName)), geom);
+    std::string meshNiceName = polyscope::utilities::guessNiceNameFromPath(args::get(inFileName));
+    polyscope::registerSurfaceMesh(meshNiceName, geom);
+
+    // == Add Distortion Data to Mesh, if any
+    if (geom->paramCoords.size() > 0) {
+      Distortion* d = new Distortion(mesh, geom);
+      
+      // Area Distortion
+      Vector3 areaDistortion = d->computeAreaScaling();
+      std::cout << "AREA DISTORTION: min: " << areaDistortion[0] << " max: " << areaDistortion[1] << " avg: " << areaDistortion[2] << std::endl;
+      polyscope::getSurfaceMesh()->addQuantity("Area Distortion", d->areaDistortion);
 /*
-  // == Create a point cloud
-  std::vector<Vector3> points;
-  for (size_t i = 0; i < 50; i++) {
-    points.push_back(3 * Vector3{unitRand() - .5, unitRand() - .5, unitRand() - .5});
-  }
-  polyscope::registerPointCloud("sample_points", points);
+      // Angle Distortion
+      Vector3 angleDistortion = d->computeQuasiConformalError();
+      std::cout << "ANGLE DISTORTION: min: " << angleDistortion[0] << " max: " << angleDistortion[1] << " avg: " << angleDistortion[2] << std::endl;
+      polyscope::getSurfaceMesh()->addQuantity("Angle Distortion", d->angleDistortion);
+
+      // Triangles flipped
+      size_t trianglesFlipped = d->computeTriangleFlips();
+      std::cout << "TRIANGLES FLIPPED: " << trianglesFlipped << std::endl;
+      polyscope::getSurfaceMesh()->addQuantity("Flipped Triangles", d->trianglesFlipped);
+      
+      // Global Overlap
+      bool globalOverlap = d->computeGlobalOverlap();
+      std::cout << "GLOBAL OVERLAP: " << globalOverlap << std::endl;
+
+      // Total Seam Length
+      size_t seamLength = d->computeSeamLength();
+      std::cout << "TOTAL SEAM LENGTH: " << seamLength << std::endl;
 */
+    }
 
-  // Register the user callback 
-  polyscope::state::userCallback = myCallback;
+    // == Add some data to the mesh we just created
+    // Note: Since the viewer only currently only has one mesh, we can omit the mesh name field
+    //       from these commands -- otherwise a correct name must be specified to getSurfaceMesh()
+    {
+      /*
+      // Two function on vertices (x coord and a random color)
+      VertexData<double> valX(mesh);
+      VertexData<Vector3> randColor(mesh);
+      for (VertexPtr v : mesh->vertices()) {
+        valX[v] = geom->position(v).x;
+        randColor[v] = Vector3{unitRand(), unitRand(), unitRand()};
+      }
+      polyscope::getSurfaceMesh()->addQuantity("x coord", valX);
+      polyscope::getSurfaceMesh()->addColorQuantity("random color", randColor);
 
-  // Give control to the polyscope gui
-  polyscope::show();
+      // Face area
+      FaceData<double> fArea(mesh);
+      for (FacePtr f : mesh->faces()) {
+        fArea[f] = geom->area(f);
+      }
+      polyscope::getSurfaceMesh()->addQuantity("face area", fArea, polyscope::DataType::MAGNITUDE);
 
+      // Edge cotan weights
+      EdgeData<double> cWeight(mesh);
+      geom->getEdgeCotanWeights(cWeight);
+      polyscope::getSurfaceMesh()->addQuantity("cotan weight", cWeight, polyscope::DataType::SYMMETRIC);
+  
+      // Vertex normals
+      VertexData<Vector3> normals(mesh);
+      geom->getVertexNormals(normals);
+      polyscope::getSurfaceMesh()->addVectorQuantity("vertex normals", normals);
+
+      // Smoothest 4-symmetric direction field
+      if(mesh->nBoundaryLoops() == 0) { // (haven't implemented for boundary yet...)
+        FaceData<Complex> smoothestField = computeSmoothestFaceDirectionField(geom, 4, true);
+        polyscope::getSurfaceMesh()->addVectorQuantity("smoothest 4-field", smoothestField, 4);
+      }
+      */
+    }
+
+    // Register the user callback 
+    polyscope::state::userCallback = myCallback;
+
+    // Give control to the polyscope gui
+    polyscope::show();
+  }
   return EXIT_SUCCESS;
+
 }

@@ -92,13 +92,17 @@ void SurfaceScalarQuantity::drawUI() {
       if (iColorMap != iColormapBefore) {
         parent->deleteProgram();
         hist.updateColormap(gl::quantitativeColormaps[iColorMap]);
+        scatter.updateColormap(gl::quantitativeColormaps[iColorMap]);
       }
     }
 
     // Draw the histogram of values
-    hist.colormapRangeMin = vizRangeLow;
-    hist.colormapRangeMax = vizRangeHigh;
-    hist.buildUI();
+    //hist.colormapRangeMin = vizRangeLow;
+    //hist.colormapRangeMax = vizRangeHigh;
+    //hist.buildUI();
+
+    // Draw the scatterplot of values
+    scatter.buildUI();
 
     // Data range
     // Note: %g specifies are generally nicer than %e, but here we don't acutally have a choice. ImGui (for somewhat
@@ -245,6 +249,16 @@ SurfaceScalarFaceQuantity::SurfaceScalarFaceQuantity(std::string name, FaceData<
 
   hist.updateColormap(gl::quantitativeColormaps[iColorMap]);
   hist.buildHistogram(valsVec, weightsVec);
+  
+  scatter.updateColormap(gl::quantitativeColormaps[iColorMap]);
+  std::vector<double> xs;
+  std::vector<double> ys;
+    for (int i = 0; i < 100; i++) {
+      xs.push_back(3 * unitRand() - .5);
+      ys.push_back(3 * unitRand() - .5);
+    }
+  scatter.buildScatterplot(xs, ys);
+  //scatter.buildScatterplot(valsVec, weightsVec);
 
   std::tie(dataRangeLow, dataRangeHigh) = robustMinMax(valsVec, 1e-5);
   resetVizRange();

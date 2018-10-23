@@ -1,5 +1,4 @@
 #include "polyscope/overlap.h"
-#include "polyscope/gl/shaders/histogram_shaders.h"
 
 #include <algorithm>
 #include <limits>
