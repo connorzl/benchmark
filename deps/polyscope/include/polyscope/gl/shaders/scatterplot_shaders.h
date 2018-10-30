@@ -8,18 +8,18 @@ static const VertShader SCATTERPLOT_VERT_SHADER =  {
 
     // attributes
     {
-        {"a_coord", GLData::Vector2Float},
+        {"a_coord", GLData::Vector3Float},
     },
 
     // source
     GLSL(150,
-      in vec2 a_coord;
+      in vec3 a_coord;
       
       out float t;
 
       void main()
       {
-          t = a_coord.x;
+          t = a_coord.z;
           vec2 scaledCoord = vec2(a_coord.x, a_coord.y);
           gl_Position = vec4(2.*scaledCoord - vec2(1.0, 1.0), 0., 1.);
       }

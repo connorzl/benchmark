@@ -28,13 +28,6 @@ using std::string;
 Geometry<Euclidean>* geom;
 HalfedgeMesh* mesh;
 polyscope::Scatterplot* scatter;
-int iColorMap = 0;
-
-// Parameters 
-size_t iGeneratedPoints = 0;
-int nPts = 100;
-float rangeLow = -5.0;
-float rangeHigh = 5.0;
 
 // A user-defined callback, for creating control panels (etc)
 // Use ImGUI commands to build whatever you want here, see https://github.com/ocornut/imgui/blob/master/imgui.h
@@ -45,53 +38,6 @@ void myCallback() {
 
   ImGui::Begin("Sample Scatterplot", &showGui); //ImGuiWindowFlags_AlwaysAutoResize);
   ImGui::PushItemWidth(100);
-  /*
-
-  // Generate a random function
-  ImGui::TextUnformatted("Generate random function:");
-  ImGui::DragFloatRange2("Data range", &rangeLow, &rangeHigh);
-  if (ImGui::Button("Generate")) {
-    VertexData<double> randF(mesh);
-    for (VertexPtr v : mesh->vertices()) {
-      randF[v] = randomReal(rangeLow, rangeHigh);
-    }
-    polyscope::getSurfaceMesh()->addQuantity("generated_function", randF);
-  }
-  ImGui::Separator();
-
-
-  // Add points 
-  ImGui::TextUnformatted("Add new points clouds:");
-  ImGui::InputInt("# pts", &nPts, 0, 1000000);
-  if (ImGui::Button("Add another")) {
-    std::vector<Vector3> points;
-    for (int i = 0; i < nPts; i++) {
-      points.push_back(3 * Vector3{unitRand() - .5, unitRand() - .5, unitRand() - .5});
-    }
-    polyscope::registerPointCloud("generated_points_"+std::to_string(iGeneratedPoints), points);
-    iGeneratedPoints++;
-  }
-  ImGui::Separator();
-
-  if (ImGui::Button("Batman")) {
-
-    polyscope::warning("Na na na na na na na na na na na na na Batman!");
-  }
-  ImGui::Separator();
-  */
-
-   // Set colormap
-  ImGui::SameLine();
-  ImGui::PushItemWidth(100);
-  (*scatter).updateColormap(polyscope::gl::quantitativeColormaps[iColorMap]);
-  int iColormapBefore = iColorMap;
-  ImGui::Combo("##colormap", &iColorMap, polyscope::gl::quantitativeColormapNames,
-                IM_ARRAYSIZE(polyscope::gl::quantitativeColormapNames));
-  ImGui::PopItemWidth();
-  if (iColorMap != iColormapBefore) {
-    (*scatter).updateColormap(polyscope::gl::quantitativeColormaps[iColorMap]);
-  }
-
   (*scatter).buildUI();
 
   // Cleanup the ImGUI window
@@ -106,12 +52,13 @@ void writeToFile(std::ofstream &outfile, std::string path, Vector3 areaDistortio
   std::string fileName = path.substr(start+1, end-start-1);
 
   std::ostringstream area;
-  area << areaDistortion[0] << "," << areaDistortion[1] << "," << areaDistortion[2];
+  area << areaDistortion[0] << " " << areaDistortion[1] << " " << areaDistortion[2];
 
   std::ostringstream angle;
-  angle << angleDistortion[0] << "," << angleDistortion[1] << "," << angleDistortion[2];
+  angle << angleDistortion[0] << " " << angleDistortion[1] << " " << angleDistortion[2];
   
   outfile << std::setw(20) << std::left << fileName;
+  outfile << std::setw(50) << std::left << path;
   outfile << std::setw(35) << std::left << area.str();
   outfile << std::setw(35) << std::left << angle.str();
   outfile << std::setw(25) << std::left << trianglesFlipped;
@@ -119,72 +66,127 @@ void writeToFile(std::ofstream &outfile, std::string path, Vector3 areaDistortio
 }
 
 int main(int argc, char** argv) {
-  bool ANALYZE_DIR = false;
-  std::vector<std::string> objFiles;
   if (strcmp(argv[1],"-a") == 0) {
-    ANALYZE_DIR = true;
+    std::cout << "Generating analysis file" << std::endl;
+    std::vector<std::string> objFiles;
     for (int i = 2; i < argc; i++) {
       objFiles.push_back(argv[i]);
     }
-  } 
-
-  if (ANALYZE_DIR) {
-
-    /*
-    // Initialize polyscope
-    polyscope::init();
 
     std::ofstream outfile ("analysis.txt");
     outfile << std::setw(20) << std::left << "File" 
+            << std::setw(50) << std::left << "Path"
               << std::setw(35) << std::left << "Area Distortion (Min,Max,Avg)" 
               << std::setw(35) << std::left << "Angle Distortion (Min,Max,Avg)" 
               << std::setw(25) << std::left << "Triangles Flipped"
               << std::setw(25) << std::left << "Global Overlap"
               << std::endl;
 
-    std::vector<Vector3> areaDistortionPoints;
-    std::vector<std::string> meshNames;
     for (size_t i = 0; i < objFiles.size(); i++) {
       mesh = new HalfedgeMesh(PolygonSoupMesh(objFiles[i]), geom);
       if (geom->paramCoords.size() == 0) continue;
-      
-      std::string meshNiceName = polyscope::utilities::guessNiceNameFromPath(objFiles[i]);
-      polyscope::registerSurfaceMesh(meshNiceName, geom);
+    
+      // Compute distortion metrics
       Distortion* d = new Distortion(mesh, geom);
-      meshNames.push_back(meshNiceName);
-
-      // Area Distortion
       Vector3 areaDistortion = d->computeAreaScaling();
-      std::cout << "AREA DISTORTION: min: " << areaDistortion[0] << " max: " << areaDistortion[1] << " avg: " << areaDistortion[2] << std::endl;
-      polyscope::getSurfaceMesh(meshNiceName)->addQuantity("Area Distortion", d->areaDistortion);
-      areaDistortionPoints.push_back(areaDistortion);
-
-      // Angle Distortion
       Vector3 angleDistortion = d->computeQuasiConformalError();
-      std::cout << "ANGLE DISTORTION: min: " << angleDistortion[0] << " max: " << angleDistortion[1] << " avg: " << angleDistortion[2] << std::endl;
-      polyscope::getSurfaceMesh(meshNiceName)->addQuantity("Angle Distortion", d->angleDistortion);
-
-      // Triangles flipped
       size_t trianglesFlipped = d->computeTriangleFlips();
-      std::cout << "TRIANGLES FLIPPED: " << trianglesFlipped << std::endl;
-      polyscope::getSurfaceMesh(meshNiceName)->addQuantity("Flipped Triangles", d->trianglesFlipped);
-      
-      // Global Overlap
       bool globalOverlap = d->computeGlobalOverlap();
-      std::cout << "GLOBAL OVERLAP: " << globalOverlap << std::endl;
 
       // Total Seam Length
       size_t seamLength = d->computeSeamLength();
-      std::cout << "TOTAL SEAM LENGTH: " << seamLength << std::endl;
+
+      //std::cout << "AREA DISTORTION: min: " << areaDistortion[0] << " max: " << areaDistortion[1] << " avg: " << areaDistortion[2] << std::endl;
+      //std::cout << "ANGLE DISTORTION: min: " << angleDistortion[0] << " max: " << angleDistortion[1] << " avg: " << angleDistortion[2] << std::endl;
+      //std::cout << "TRIANGLES FLIPPED: " << trianglesFlipped << std::endl;
+      //std::cout << "GLOBAL OVERLAP: " << globalOverlap << std::endl;
+      //std::cout << "TOTAL SEAM LENGTH: " << seamLength << std::endl;
+      writeToFile(outfile, objFiles[i], areaDistortion, angleDistortion, trianglesFlipped, globalOverlap);
     }
     outfile.close();
+  } else if (strcmp(argv[1],"-d") == 0) {
+    std::cout << "Visualizing" << std::endl;
 
-    // Register the user callback 
+    std::string filename = argv[2];
+    std::ifstream in(filename);
+    if (!in) throw std::invalid_argument("Could not open mesh file " + filename);
+    
+    // information that we want to parse for each mesh
+    std::vector<std::string> meshnames;
+    std::vector<std::string> filepaths;
+    std::vector<double> minAreaDistortion;
+    std::vector<double> maxAreaDistortion;
+    std::vector<double> avgAreaDistortion;
+    std::vector<double> minAngleDistortion;
+    std::vector<double> maxAngleDistortion;
+    std::vector<double> avgAngleDistortion;
+    std::vector<double> trianglesFlipped;
+    std::vector<double> globalOverlap;
+
+    std::string line;
+    getline(in,line); // skip first line, which only contains labels for readability
+    while (getline(in, line)) {
+      std::stringstream ss(line);
+      std::string token;
+      double minVal, maxVal, avgVal;
+      double d;
+
+      // parse name
+      ss >> token;
+      meshnames.push_back(token);
+
+      // parse filepath
+      ss >> token;
+      filepaths.push_back(token);
+
+      // parse area distortion
+      ss >> minVal >> maxVal >> avgVal;
+      minAreaDistortion.push_back(minVal);
+      maxAreaDistortion.push_back(maxVal);
+      avgAreaDistortion.push_back(avgVal);
+
+      // parse angle distortion
+      ss >> minVal >> maxVal >> avgVal;
+      minAngleDistortion.push_back(minVal);
+      maxAngleDistortion.push_back(maxVal);
+      avgAngleDistortion.push_back(avgVal);
+
+      // parse triangles flipped
+      ss >> d;
+      trianglesFlipped.push_back(d);
+      
+      // parse global overlap
+      ss >> d;
+      globalOverlap.push_back(d);
+    }
+
+    polyscope::init();
+
+     // Register the user callback 
     polyscope::state::userCallback = myCallback;
+    
+    scatter = new polyscope::Scatterplot();
+    (*scatter).updateColormap(polyscope::gl::quantitativeColormaps[0]);
+    std::vector<std::vector<double>> data;
+    data.push_back(minAreaDistortion);
+    data.push_back(maxAreaDistortion);
+    data.push_back(avgAreaDistortion);
+    data.push_back(minAngleDistortion);
+    data.push_back(maxAngleDistortion);
+    data.push_back(avgAngleDistortion);
 
-    // Give control to the polyscope gui
+    std::vector<char*> labels;
+    labels.push_back((char*)"min area distortion");
+    labels.push_back((char*)"max area distortion");
+    labels.push_back((char*)"avg area distortion");
+    labels.push_back((char*)"min angle distortion");
+    labels.push_back((char*)"max angle distortion");
+    labels.push_back((char*)"avg angle distortion");
+
+    (*scatter).buildScatterPlot(data,labels);
+    
     polyscope::show();
-    */
+
   } else {
 
     // Configure the argument parser
@@ -225,7 +227,7 @@ int main(int argc, char** argv) {
       Vector3 areaDistortion = d->computeAreaScaling();
       std::cout << "AREA DISTORTION: min: " << areaDistortion[0] << " max: " << areaDistortion[1] << " avg: " << areaDistortion[2] << std::endl;
       polyscope::getSurfaceMesh()->addQuantity("Area Distortion", d->areaDistortion);
-/*
+
       // Angle Distortion
       Vector3 angleDistortion = d->computeQuasiConformalError();
       std::cout << "ANGLE DISTORTION: min: " << angleDistortion[0] << " max: " << angleDistortion[1] << " avg: " << angleDistortion[2] << std::endl;
@@ -243,61 +245,35 @@ int main(int argc, char** argv) {
       // Total Seam Length
       size_t seamLength = d->computeSeamLength();
       std::cout << "TOTAL SEAM LENGTH: " << seamLength << std::endl;
-*/
-    }
-
-    // == Add some data to the mesh we just created
-    // Note: Since the viewer only currently only has one mesh, we can omit the mesh name field
-    //       from these commands -- otherwise a correct name must be specified to getSurfaceMesh()
-    {
-      /*
-      // Two function on vertices (x coord and a random color)
-      VertexData<double> valX(mesh);
-      VertexData<Vector3> randColor(mesh);
-      for (VertexPtr v : mesh->vertices()) {
-        valX[v] = geom->position(v).x;
-        randColor[v] = Vector3{unitRand(), unitRand(), unitRand()};
-      }
-      polyscope::getSurfaceMesh()->addQuantity("x coord", valX);
-      polyscope::getSurfaceMesh()->addColorQuantity("random color", randColor);
-
-      // Face area
-      FaceData<double> fArea(mesh);
-      for (FacePtr f : mesh->faces()) {
-        fArea[f] = geom->area(f);
-      }
-      polyscope::getSurfaceMesh()->addQuantity("face area", fArea, polyscope::DataType::MAGNITUDE);
-
-      // Edge cotan weights
-      EdgeData<double> cWeight(mesh);
-      geom->getEdgeCotanWeights(cWeight);
-      polyscope::getSurfaceMesh()->addQuantity("cotan weight", cWeight, polyscope::DataType::SYMMETRIC);
-  
-      // Vertex normals
-      VertexData<Vector3> normals(mesh);
-      geom->getVertexNormals(normals);
-      polyscope::getSurfaceMesh()->addVectorQuantity("vertex normals", normals);
-
-      // Smoothest 4-symmetric direction field
-      if(mesh->nBoundaryLoops() == 0) { // (haven't implemented for boundary yet...)
-        FaceData<Complex> smoothestField = computeSmoothestFaceDirectionField(geom, 4, true);
-        polyscope::getSurfaceMesh()->addVectorQuantity("smoothest 4-field", smoothestField, 4);
-      }
-      */
     }
 
     // Register the user callback 
     polyscope::state::userCallback = myCallback;
     
     scatter = new polyscope::Scatterplot();
+    (*scatter).updateColormap(polyscope::gl::quantitativeColormaps[0]);
     std::vector<double> xs;
     std::vector<double> ys;
+    std::vector<double> zs;
     for (int i = 0; i < 100; i++) {
       xs.push_back(3 * unitRand() - .5);
       ys.push_back(3 * unitRand() - .5);
+      zs.push_back(3 * unitRand() - .5);
     }
-    (*scatter).buildScatterplot(xs, ys);
+    //(*scatter).buildScatterplot(xs, ys, zs);
     
+    std::vector<std::vector<double>> data;
+    data.push_back(xs);
+    data.push_back(ys);
+    data.push_back(zs);
+
+    std::vector<char*> labels;
+    labels.push_back((char*)"A");
+    labels.push_back((char*)"B");
+    labels.push_back((char*)"C");
+
+    (*scatter).buildScatterPlot(data,labels);
+
     // Give control to the polyscope gui
     polyscope::show();
   }
