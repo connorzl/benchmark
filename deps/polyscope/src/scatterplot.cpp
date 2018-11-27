@@ -17,7 +17,6 @@ namespace polyscope {
 
 Scatterplot::Scatterplot() {
   prepare();
-  fillBuffers();
 }
 
 Scatterplot::~Scatterplot() {
@@ -26,84 +25,123 @@ Scatterplot::~Scatterplot() {
   }
 }
 
-void Scatterplot::buildScatterplot(std::vector<double>& xs_, std::vector<double>& ys_, const std::vector<double>& zs_) {
-    xs = xs_;
-    ys = ys_;
-    xs_norm = xs_;
-    ys_norm = ys_;
+void Scatterplot::computeLogData() {
+  logData = data;
+  for (size_t i = 0; i < logData.size(); i++) {
+    for (size_t j = 0; j < logData[i].size(); j++) {
+      logData[i][j] = log2(logData[i][j]);
+    }
+  }
+  computeDataNorm(logData, true);
+}
 
+void Scatterplot::computeDataNorm(std::vector<std::vector<double>> &data, bool useLog) { 
+    double minVal;
+    double maxVal;
+    double range;
+
+    std::vector<std::pair<double,double>> dataMinMax_;
+    std::vector<std::vector<double>> dataNorm_;
+    for (size_t i = 0; i < data.size(); i++) {
+      std::vector<double> currData = data[i];
+      std::pair<double, double> minmax = robustMinMax(currData);
+      minVal = minmax.first;
+      maxVal = minmax.second;
+      range = maxVal - minVal;
+      dataMinMax_.push_back(minmax);
+
+      std::vector<double> currDataNorm;
+      for (size_t j = 0; j < currData.size(); j++) {
+        currDataNorm.push_back( (currData[j] - minVal) / range * 0.9 + 0.05 );
+      }
+      dataNorm_.push_back(currDataNorm);
+    }
+
+    if (useLog) {
+      logDataMinMax = dataMinMax_;
+      logDataNorm = dataNorm_;
+    } else {
+      dataMinMax = dataMinMax_;
+      dataNorm = dataNorm_;
+    }
+}
+
+void Scatterplot::buildScatterplot(std::vector<double>& xs_, std::vector<double>& ys_, const std::vector<double>& zs_) {
+    if (xs_.size() != ys_.size() || ys_.size() != xs_.size()) {
+      polyscope::error("Data vectors must have same length!");
+    }
+    data.push_back(xs_);
+    data.push_back(ys_);
+    xData = 0;
+    yData = 1;
     if (zs_.size() != 0) {
       hasZ = true;
-      zs = zs_;
-      zs_norm = zs_;
+      zData = 2;
+      data.push_back(zs_);
     }
 
-    // normalize to [0, 1] range
-    std::pair<double, double> xminmax = robustMinMax(xs_);
-    xminVal = xminmax.first;
-    xmaxVal = xminmax.second;
-    double xrange = xmaxVal - xminVal;
-
-    std::pair<double, double> yminmax = robustMinMax(ys_);
-    yminVal = yminmax.first;
-    ymaxVal = yminmax.second;
-    double yrange = ymaxVal - yminVal;
-
-    double zrange = 0;
-    if (hasZ) {
-      std::pair<double, double> zminmax = robustMinMax(zs_);
-      zminVal = zminmax.first;
-      zmaxVal = zminmax.second;
-      zrange = zmaxVal - zminVal;
-    }
-
-    for (size_t i = 0; i < xs_norm.size(); i++) {
-        xs_norm[i] = (xs_norm[i] - xminVal) / xrange * 0.9 + 0.05;
-        ys_norm[i] = (ys_norm[i] - yminVal) / yrange * 0.9 + 0.05;
-
-        if (hasZ) {
-          zs_norm[i] = (zs_norm[i] - zminVal) / zrange * 0.9 + 0.05;
-        }
-    }
-    
+    computeDataNorm(data);
+    computeLogData();
     fillBuffers();
 }
 
-void Scatterplot::buildScatterPlot(std::vector<std::vector<double>>& data_, std::vector<char*>& labels_) {
+void Scatterplot::buildScatterplot(std::vector<std::vector<double>>& data_, std::vector<char*>& labels_) {
   isGeneral = true;
-  generalData = data_;
-  generalLabels = labels_;
+  data = data_;
+  labels = labels_;
 
-  double minVal;
-  double maxVal;
-  double range;
-  for (size_t i = 0; i < generalData.size(); i++) {
-    std::vector<double> currData = generalData[i];
-    std::pair<double, double> minmax = robustMinMax(currData);
-    minVal = minmax.first;
-    maxVal = minmax.second;
-    range = maxVal - minVal;
-    generalMinMax.push_back(minmax);
-
-    std::vector<double> currDataNorm;
-    for (size_t j = 0; j < currData.size(); j++) {
-      currDataNorm.push_back( (currData[j] - minVal) / range * 0.9 + 0.05 );
-    }
-    generalDataNorm.push_back(currDataNorm);
-  }
+  computeDataNorm(data);
+  computeLogData();
 
   // handle color coordinate, off by default
   hasZ = false;
-  generalLabelsZ = generalLabels;
-  generalLabelsZ.push_back((char*)"None");
-  zData = generalLabels.size();
-
-  xminVal = generalMinMax[xData].first;
-  xmaxVal = generalMinMax[xData].second;
-  yminVal = generalMinMax[yData].first;
-  ymaxVal = generalMinMax[yData].second;
-
+  zLabels = labels;
+  zLabels.push_back((char*)"None");
+  zData = labels.size();
   fillBuffers();
+}
+
+void Scatterplot::buildScatterplot(std::vector<std::vector<double>>& data_, std::vector<char*>& labels_,
+                      std::vector<std::string> &meshNames_, std::vector<std::string> &filePaths_,
+                      std::vector<std::vector<double>> &additionalData_, std::vector<std::string> &additionalDataLabels_,
+                      const std::vector<double>& pointSizes_, int numParitions_) {
+  // perform some error checking
+  if (labels_.size() != data_.size()) {
+    error("There must be the same number of data vectors and labels!");
+  }
+  if (meshNames_.size() != filePaths_.size()) {
+    error("There must be the same number of mesh names and filepaths!");
+  }
+  if (additionalData_.size() != additionalDataLabels_.size()) {
+    error("There must be the same number of additional data vectors and labels!");
+  }
+  for (size_t i = 0; i < data_.size(); i++) {
+    if (data_[i].size() != meshNames_.size()) {
+      error("There must be the same number of points per data vector as mesh names and filepaths!");
+    }
+  }
+  for (size_t i = 0; i < additionalData_.size(); i++) {
+    if (meshNames_.size() != additionalData_[i].size()) {
+      error("There must be the same number of points and labels per additional data vector as mesh names and filepaths!");
+    }
+  }
+
+  // Set properties
+  meshInfo = true;
+  meshNames = meshNames_;
+  filePaths = filePaths_;
+  additionalData = additionalData_;
+  additionalDataLabels = additionalDataLabels_;
+  numPartitions = numParitions_;
+
+  if (pointSizes_.size() != 0) {
+    std::pair<double, double> minmax = robustMinMax(pointSizes_);
+    pointScaling = pointSizes_;
+    for (size_t i = 0; i < pointScaling.size(); i++) {
+      pointScaling[i] = (pointScaling[i] - minmax.first) / (minmax.second - minmax.first) * .5 + .5;
+    }
+  }
+  buildScatterplot(data_, labels_);
 }
 
 void Scatterplot::updateColormap(const gl::Colormap* newColormap) {
@@ -115,21 +153,44 @@ std::vector<Vector3> Scatterplot::computePointCoords() {
   std::vector<Vector3> coords;
   float doublePi = 2.0f * M_PI;
 
-  for (size_t j = 0; j < xs_norm.size(); j++) {
-    float x0 = xs_norm[j];
-    float y0 = ys_norm[j];
+  std::vector<double> xdataNorm;
+  if (logX) {
+    xdataNorm = logDataNorm[xData];
+  } else {
+    xdataNorm = dataNorm[xData];
+  }
+
+  std::vector<double> ydataNorm;
+  if (logY) {
+    ydataNorm = logDataNorm[yData];
+  } else {
+    ydataNorm = dataNorm[yData];
+  }
+
+  float pointRadius;
+  for (size_t j = 0; j < xdataNorm.size(); j++) {
+    pointRadius = radius;
+    if (scalePoints) {
+      pointRadius = radius * pointScaling[j];
+    } 
+    float x0 = xdataNorm[j];
+    float y0 = ydataNorm[j];
 
     for (int i = 0; i < numSides; i++) {
-      GLfloat x1 = x0 + ( radius * cos( doublePi * i / float(numSides)) );
-      GLfloat y1 = y0 + ( radius * sin( doublePi * i / float(numSides)) );
+      GLfloat x1 = x0 + ( pointRadius * cos( doublePi * i / float(numSides)) );
+      GLfloat y1 = y0 + ( pointRadius * sin( doublePi * i / float(numSides)) );
 
       int iNext = (i+1) % numSides;
-      GLfloat x2 = x0 + ( radius * cos( doublePi * iNext / float(numSides)) );
-      GLfloat y2 = y0 + ( radius * sin( doublePi * iNext / float(numSides)) );
+      GLfloat x2 = x0 + ( pointRadius * cos( doublePi * iNext / float(numSides)) );
+      GLfloat y2 = y0 + ( pointRadius * sin( doublePi * iNext / float(numSides)) );
 
       float zCoord = 1.0;
       if (hasZ) {
-        zCoord = zs_norm[j];
+        zCoord = dataNorm[zData][j];
+      } else if (numPartitions > 0) {
+        int elemsPerPartition = xdataNorm.size() / numPartitions;
+        int currPartition = j / elemsPerPartition;
+        zCoord = currPartition / (numPartitions - 1.0);
       }
       coords.push_back(Vector3{x0,y0,zCoord});
       coords.push_back(Vector3{x1,y1,zCoord});
@@ -176,18 +237,7 @@ void Scatterplot::prepareColorCoords() {
   }
 }
 
-void Scatterplot::fillBuffers() {
-  if (isGeneral) {
-    xs = generalData[xData];
-    xs_norm = generalDataNorm[xData];
-    ys = generalData[yData];
-    ys_norm = generalDataNorm[yData];
-    if (hasZ) {
-      zs = generalData[zData];
-      zs_norm = generalDataNorm[zData];
-    }
-  }
-
+void Scatterplot::fillBuffers() {  
   pointCoords = computePointCoords();
   scatterProgram->setAttribute("a_coord", pointCoords);
   scatterProgram->setTextureFromColormap("t_colormap", *colormap, true);
@@ -244,7 +294,7 @@ void Scatterplot::prepare() {
   prepareBuffers(0);
   prepareBuffers(1);
   prepareColorCoords();
-  
+
   // Create the programs
   scatterProgram = new gl::GLProgram(&SCATTERPLOT_VERT_SHADER, &SCATTERPLOT_FRAG_SHADER, gl::DrawMode::Triangles);
   colormapProgram = new gl::GLProgram(&SCATTERPLOT_VERT_SHADER, &SCATTERPLOT_FRAG_SHADER, gl::DrawMode::Triangles);
@@ -308,6 +358,33 @@ void Scatterplot::buildScatter(float w, float h) {
   ImGui::Image(reinterpret_cast<void*>((size_t)textureInd) /* yes, really. */, ImVec2(w, h), ImVec2(0, 1),ImVec2(1, 0));
   ImGui::SetCursorScreenPos(ImVec2{ImGui::GetCursorScreenPos().x-x_offset, ImGui::GetCursorScreenPos().y});
   
+  // first, retrieve all the relevant data
+  std::vector<double> xdataNorm;
+  std::vector<double> xdata;
+  std::pair<double,double> xMinMax;
+  if (logX) {
+    xdataNorm = logDataNorm[xData];
+    xdata = logData[xData];
+    xMinMax = logDataMinMax[xData];
+  } else {
+    xdataNorm = dataNorm[xData];
+    xdata = data[xData];
+    xMinMax = dataMinMax[xData];
+  }
+
+  std::vector<double> ydataNorm;
+  std::vector<double> ydata;
+  std::pair<double,double> yMinMax;
+  if (logY) {
+    ydataNorm = logDataNorm[yData];
+    ydata = logData[yData];
+    yMinMax = logDataMinMax[yData];
+  } else {
+    ydataNorm = dataNorm[yData];
+    ydata = data[yData];
+    yMinMax = dataMinMax[yData];
+  }
+
   ImDrawList* L = ImGui::GetWindowDrawList();
   // Draw a cursor popup on mouseover
   if (ImGui::IsItemHovered()) {
@@ -322,10 +399,14 @@ void Scatterplot::buildScatter(float w, float h) {
     float closestD = -1;
     int index = 0;
     // Check if mouse is selecting over a scatterplot point
-    for (size_t i = 0; i < xs.size(); i++) {
-      float x_c = xs_norm[i];
-      float y_c = ys_norm[i];
+    for (size_t i = 0; i < xdata.size(); i++) {
+      float x_c = xdataNorm[i];
+      float y_c = ydataNorm[i];
       float d = sqrt( (x_c - x_p) * (x_c - x_p) + (y_c - y_p) * (y_c - y_p) );
+      float r = radius;
+      if (scalePoints) {
+        r *= pointScaling[i];
+      }
       if (d <= radius) {
         if (closestD == -1 || d < closestD) {
           closestD = d;
@@ -335,16 +416,20 @@ void Scatterplot::buildScatter(float w, float h) {
     }
 
     // Show coordinates of selected point
-    if (closestD != -1) { 
-      float circle_x = xs_norm[index] * w + x_offset + windowX + ImGui::GetScrollX();
-      float circle_y = (1.0 - ys_norm[index]) * h + windowY;
-      L->AddCircle(ImVec2{circle_x,circle_y},radius*w,ImColor(255, 255, 255, 255), numSides, 3.0);
+    if (closestD != -1) {     
+      float circle_x = xdataNorm[index] * w + x_offset + windowX + ImGui::GetScrollX();
+      float circle_y = (1.0 -ydataNorm[index]) * h + windowY;
+      float r = radius;
+      if (scalePoints) {
+        r *= pointScaling[index];
+      }
+      L->AddCircle(ImVec2{circle_x,circle_y},r*w,ImColor(255, 255, 255, 255), numSides, 3.0);  
       
       ImGui::BeginTooltip();
       if (hasZ) {
-        ImGui::Text("%g, %g, %g", xs[index], ys[index], zs[index]);
+        ImGui::Text("%g, %g, %g", xdata[index], ydata[index], data[zData][index]);
       } else {
-        ImGui::Text("%g, %g", xs[index], ys[index]);
+        ImGui::Text("%g, %g", xdata[index], ydata[index]);
       }
       ImGui::EndTooltip();
 
@@ -354,9 +439,24 @@ void Scatterplot::buildScatter(float w, float h) {
     }
   }
 
+  // Keep highlighting the selected point
+  if (selectedIndex != -1) {
+    float circle_x = xdataNorm[selectedIndex] * w + x_offset + windowX + ImGui::GetScrollX();
+    float circle_y = (1.0 - ydataNorm[selectedIndex]) * h + windowY;
+    float r = radius;
+    if (scalePoints) {
+      r *= pointScaling[selectedIndex];
+    }
+    L->AddCircle(ImVec2{circle_x,circle_y},r*w,ImColor(255, 255, 255, 255), numSides, 3.0);
+  }
+
   // Draw axis stuff
   ImGui::Text("");
   int intervals = 5;
+  double xminVal = xMinMax.first;
+  double xmaxVal = xMinMax.second;
+  double yminVal = yMinMax.first;
+  double ymaxVal = yMinMax.second;
   float stepsizeX = (xmaxVal - xminVal) / intervals;
   float stepsizeY = (ymaxVal - yminVal) / intervals;
   windowX = windowX + x_offset;
@@ -383,18 +483,42 @@ void Scatterplot::buildScatter(float w, float h) {
     L->AddText(ImVec2{windowX-x_offset, windowY + h - currT - y_offset},ImColor(255, 255, 255, 255), s.c_str());
   }  
 
+  // Option to use log axis
+  ImGui::Separator();
+  bool prevLogX = logX;
+  ImGui::Checkbox("Log scale for X-axis", &logX);
+  ImGui::SameLine();
+  bool prevLogY = logY;
+  ImGui::Checkbox("Log scale for Y-axis", &logY);
+  if (logX != prevLogX || logY != prevLogY) {
+    fillBuffers();
+  }
+
   // Additional information about selected point
   ImGui::Separator();
   if (selectedIndex != -1) {
-    ImGui::BulletText("X Coordinate: %g", xs[selectedIndex]);
-    ImGui::BulletText("Y Coordinate: %g", ys[selectedIndex]);
+    ImGui::Text("Point Coordinates");
+    ImGui::BulletText("X : %g", xdata[selectedIndex]);
+    ImGui::BulletText("Y : %g", ydata[selectedIndex]);
     if (hasZ) {
-      ImGui::BulletText("Z Coordinate: %g", zs[selectedIndex]);
+      ImGui::BulletText("Z : %g", data[zData][selectedIndex]);
     }
 
-    // if there is additional information passed in...
-    if (ImGui::Button("Load Mesh")) {
-      std::cout<<"weijaers"<<std::endl;
+    // if there is additional information passed in about the meshes
+    if (meshInfo) {
+      ImGui::Text("Mesh Name: %s", meshNames[selectedIndex].c_str());
+      for (size_t i = 0; i < additionalData.size(); i++) {
+        ImGui::BulletText("%s : %g", additionalDataLabels[i].c_str(), additionalData[i][selectedIndex]);
+      }
+      if (ImGui::Button("Load Mesh")) {
+        mesh = new HalfedgeMesh(PolygonSoupMesh(filePaths[selectedIndex]), geom);
+        polyscope::registerSurfaceMesh(meshNames[selectedIndex], geom);
+        computeDistortion(meshNames[selectedIndex]);
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Remove Mesh")) {
+        polyscope::removeStructure("Surface Mesh", meshNames[selectedIndex]);
+      }
     }
   } else {
     ImGui::Text("Click on a point for additional information!");
@@ -405,23 +529,15 @@ void Scatterplot::buildScatter(float w, float h) {
     ImGui::Separator();
     int xDataBefore = xData;
     int yDataBefore = yData;
-    int zDataBefore = zData;
-    ImGui::Combo("X-Axis Data", &xData, generalLabels.data(), generalLabels.size());
-    ImGui::Combo("Y-Axis Data", &yData, generalLabels.data(), generalLabels.size());
-    ImGui::Combo("Colors Data", &zData, generalLabelsZ.data(), generalLabelsZ.size());
-    if (xDataBefore != xData || yDataBefore != yData || zDataBefore != zData) {
-      if (strcmp(generalLabelsZ[zData], (char*)"None") == 0) {
-        hasZ = false;
-      } else {
-        hasZ = true;
-        zminVal = generalMinMax[zData].first;
-        zmaxVal = generalMinMax[zData].second;
-      }
+    ImGui::Combo("X-Axis Data", &xData, labels.data(), labels.size());
+    ImGui::Combo("Y-Axis Data", &yData, labels.data(), labels.size());
 
-      xminVal = generalMinMax[xData].first;
-      xmaxVal = generalMinMax[xData].second;
-      yminVal = generalMinMax[yData].first;
-      ymaxVal = generalMinMax[yData].second;
+    int zDataBefore = zData;
+    if (numPartitions == 0) {
+      ImGui::Combo("Colors Data", &zData, zLabels.data(), zLabels.size());
+    }
+    if (xDataBefore != xData || yDataBefore != yData || zDataBefore != zData) {
+      hasZ = (strcmp(zLabels[zData], (char*)"None") != 0);
       fillBuffers();
     }
   }
@@ -438,28 +554,46 @@ void Scatterplot::buildColormap(float w, float h) {
   if (iColorMap != iColormapBefore) {
     updateColormap(polyscope::gl::quantitativeColormaps[iColorMap]);
   }
-  
+
+  if (!hasZ) {
+    return;
+  }
+
   // Draw colormap image
   ImGui::SameLine();
   renderToTexture(1);
-  ImGui::Image(reinterpret_cast<void*>((size_t)textureInd2) /* yes, really. */, ImVec2(w/1.5, h/10.0), ImVec2(0, 1),
-               ImVec2(1, 0));
+  float colorMapW = w / 1.5;
+  float colorMapH = h / 10.0;
+  ImGui::Image(reinterpret_cast<void*>((size_t)textureInd2) /* yes, really. */, ImVec2(colorMapW, colorMapH), 
+              ImVec2(0, 1), ImVec2(1, 0));
 
   // Draw a cursor popup on mouseover
   if (ImGui::IsItemHovered() && hasZ) {
-    // Get mouse x coodinate within image
+    double zminVal = dataMinMax[zData].first;
+    double zmaxVal = dataMinMax[zData].second;
+    // Get mouse x coordinate within image
     float mouseX = ImGui::GetMousePos().x - ImGui::GetCursorScreenPos().x - ImGui::GetScrollX();
-    double mouseT = (mouseX - widgetWidth - widgetPadding) / ( w/1.5 );
+    double mouseT = (mouseX - widgetWidth - widgetPadding) / ( colorMapW );
     double val = zminVal + mouseT * (zmaxVal - zminVal);
     ImGui::SetTooltip("%g", val);
 
     // Draw line showing value of colormap at current mouse position
     ImVec2 imageUpperLeft(ImGui::GetCursorScreenPos().x, ImGui::GetCursorScreenPos().y);
-    ImVec2 lineStart(imageUpperLeft.x + mouseX, imageUpperLeft.y - h/10.0 - 4);
+    ImVec2 lineStart(imageUpperLeft.x + mouseX, imageUpperLeft.y - colorMapH - 4);
     ImVec2 lineEnd(imageUpperLeft.x + mouseX, imageUpperLeft.y - 4);
     ImGui::GetWindowDrawList()->AddLine(lineStart, lineEnd,
                                         ImGui::ColorConvertFloat4ToU32(ImVec4(254 / 255., 221 / 255., 66 / 255., 1.0)));
   }
+}
+
+void Scatterplot::computeDistortion(std::string meshName) {
+  distort = new Distortion(mesh, geom);
+  distort->computeAreaScaling();
+  polyscope::getSurfaceMesh(meshName)->addQuantity("Area Distortion", distort->areaDistortion);
+  distort->computeQuasiConformalError();
+  polyscope::getSurfaceMesh(meshName)->addQuantity("Angle Distortion", distort->angleDistortion);
+  distort->computeTriangleFlips();
+  polyscope::getSurfaceMesh(meshName)->addQuantity("Flipped Triangles", distort->trianglesFlipped);
 }
 
 void Scatterplot::buildUI(float width) {
@@ -474,13 +608,22 @@ void Scatterplot::buildUI(float width) {
   buildScatter(w, h);
 
   // build colormap
-  buildColormap(w, h);
+  buildColormap(w, h); 
 
   // Add slider for point radius
   float prevRadius = radius;
   ImGui::SliderFloat("Point Radius", &radius, 0.005, .075, "%.5f", 1.);
   if (radius != prevRadius) {
     fillBuffers();
+  }
+
+  // Add option to scale points
+  if (pointScaling.size() > 0) {
+    bool prevScalePoints = scalePoints;
+    ImGui::Checkbox("Scale Points by Mesh Sizes", &scalePoints);
+    if (prevScalePoints != scalePoints) {
+      fillBuffers();
+    }
   }
 }
 

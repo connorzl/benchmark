@@ -17,6 +17,8 @@
 #include "polyscope/scatterplot.h"
 #include "polyscope/gl/colormap_sets.h"
 
+#include <map> 
+
 using namespace geometrycentral;
 using std::cerr;
 using std::cout;
@@ -46,7 +48,7 @@ void myCallback() {
 }
 
 void writeToFile(std::ofstream &outfile, std::string path, Vector3 areaDistortion, Vector3 angleDistortion, 
-                 size_t trianglesFlipped, bool globalOverlap) {
+                 size_t trianglesFlipped, bool globalOverlap, size_t seamLength, double numFaces) {
   std::size_t start = path.find_last_of('/');
   std::size_t end = path.find_last_of('.');
   std::string fileName = path.substr(start+1, end-start-1);
@@ -62,17 +64,12 @@ void writeToFile(std::ofstream &outfile, std::string path, Vector3 areaDistortio
   outfile << std::setw(35) << std::left << area.str();
   outfile << std::setw(35) << std::left << angle.str();
   outfile << std::setw(25) << std::left << trianglesFlipped;
-  outfile << std::setw(25) << std::left << globalOverlap << std::endl;
+  outfile << std::setw(25) << std::left << globalOverlap;
+  outfile << std::setw(25) << std::left << seamLength;
+  outfile << std::setw(25) << std::left << numFaces << std::endl;
 }
 
-int main(int argc, char** argv) {
-  if (strcmp(argv[1],"-a") == 0) {
-    std::cout << "Generating analysis file" << std::endl;
-    std::vector<std::string> objFiles;
-    for (int i = 2; i < argc; i++) {
-      objFiles.push_back(argv[i]);
-    }
-
+void generateAnalysisFile(std::vector<std::string> objFiles) {
     std::ofstream outfile ("analysis.txt");
     outfile << std::setw(20) << std::left << "File" 
             << std::setw(50) << std::left << "Path"
@@ -80,6 +77,8 @@ int main(int argc, char** argv) {
               << std::setw(35) << std::left << "Angle Distortion (Min,Max,Avg)" 
               << std::setw(25) << std::left << "Triangles Flipped"
               << std::setw(25) << std::left << "Global Overlap"
+              << std::setw(25) << std::left << "Seam Length"
+              << std::setw(25) << std::left << "Number Faces"
               << std::endl;
 
     for (size_t i = 0; i < objFiles.size(); i++) {
@@ -92,25 +91,161 @@ int main(int argc, char** argv) {
       Vector3 angleDistortion = d->computeQuasiConformalError();
       size_t trianglesFlipped = d->computeTriangleFlips();
       bool globalOverlap = d->computeGlobalOverlap();
-
-      // Total Seam Length
       size_t seamLength = d->computeSeamLength();
-
-      //std::cout << "AREA DISTORTION: min: " << areaDistortion[0] << " max: " << areaDistortion[1] << " avg: " << areaDistortion[2] << std::endl;
-      //std::cout << "ANGLE DISTORTION: min: " << angleDistortion[0] << " max: " << angleDistortion[1] << " avg: " << angleDistortion[2] << std::endl;
-      //std::cout << "TRIANGLES FLIPPED: " << trianglesFlipped << std::endl;
-      //std::cout << "GLOBAL OVERLAP: " << globalOverlap << std::endl;
-      //std::cout << "TOTAL SEAM LENGTH: " << seamLength << std::endl;
-      writeToFile(outfile, objFiles[i], areaDistortion, angleDistortion, trianglesFlipped, globalOverlap);
+      double numFaces = mesh->nFaces();
+      writeToFile(outfile, objFiles[i], areaDistortion, angleDistortion, trianglesFlipped, globalOverlap, seamLength, numFaces);
     }
     outfile.close();
+}
+
+void parseAnalysisFile(std::string filename, std::vector<std::string> &meshnames, std::vector<std::string> &filepaths,
+  std::vector<double> &minAreaDistortion, std::vector<double> &maxAreaDistortion, std::vector<double> &avgAreaDistortion,
+  std::vector<double> &minAngleDistortion, std::vector<double> &maxAngleDistortion, std::vector<double> &avgAngleDistortion,
+  std::vector<double> &trianglesFlipped, std::vector<double> &globalOverlap, std::vector<double> &seamLengths, 
+  std::vector<double> &numFaces, const std::map<std::string, bool>& sharedMeshes = std::map<std::string, bool>(),
+  const std::string suffix = "") {
+
+  std::ifstream in(filename);
+  if (!in) throw std::invalid_argument("Could not open analysis file " + filename);
+
+  std::string line;
+  getline(in,line); // skip first line, which only contains labels for readability
+  while (getline(in, line)) {
+    std::stringstream ss(line);
+    std::string token;
+    double minVal, maxVal, avgVal;
+    double d;
+
+    // parse name
+    ss >> token;
+    if (sharedMeshes.size() > 0) {
+      if (sharedMeshes.find(token) == sharedMeshes.end()) {
+        continue;
+      } else {
+        meshnames.push_back(token + "-" + suffix);
+      }
+    } else {
+      meshnames.push_back(token);
+    }
+
+    // parse filepath
+    ss >> token;
+    filepaths.push_back(token);
+
+    // parse area distortion
+    ss >> minVal >> maxVal >> avgVal;
+    minAreaDistortion.push_back(minVal);
+    maxAreaDistortion.push_back(maxVal);
+    avgAreaDistortion.push_back(avgVal);
+
+    // parse angle distortion
+    ss >> minVal >> maxVal >> avgVal;
+    minAngleDistortion.push_back(minVal);
+    maxAngleDistortion.push_back(maxVal);
+    avgAngleDistortion.push_back(avgVal);
+
+    // parse triangles flipped
+    ss >> d;
+    trianglesFlipped.push_back(d);
+    
+    // parse global overlap
+    ss >> d;
+    globalOverlap.push_back(d);
+
+    // parse total seam length
+    ss >> d;
+    seamLengths.push_back(d);
+
+    // parse number faces
+    ss >> d;
+    numFaces.push_back(d);
+  }
+}
+
+std::map<std::string,bool> findSharedMeshes(std::vector<std::string> analysisFiles) {
+  std::map<std::string,bool> sharedObjFiles;
+  std::map<std::string,size_t> meshCounts;
+
+  for (size_t i = 0; i < analysisFiles.size(); i++) {
+    std::ifstream in(analysisFiles[i]);
+    if (!in) throw std::invalid_argument("Could not open analysis file " + analysisFiles[i]);
+
+    std::string line;
+    getline(in,line); // skip first line, which only contains labels for readability
+
+    while (getline(in, line)) {
+      std::stringstream ss(line);
+      std::string fileName;
+      std::string filePath;
+
+      // parse fileName and filePath
+      ss >> fileName;
+      if ( meshCounts.find(fileName) == meshCounts.end() ) {
+        meshCounts[fileName] = 1;
+      } else {
+        meshCounts[fileName] += 1;
+      }
+    }
+  }
+
+  for(std::map<std::string, size_t>::const_iterator it = meshCounts.begin();
+    it != meshCounts.end(); ++it) {
+    // only take the meshes that all the analysis files share
+    if (it->second == analysisFiles.size()) {
+        sharedObjFiles[it->first] = true;
+    }
+  }
+  return sharedObjFiles;
+}
+
+void parseAnalysisMeshes(std::map<std::string,bool> objFiles, std::vector<std::string> analysisFiles) {
+  // information that we want to parse for each mesh
+  std::vector<std::string> meshnames;
+  std::vector<std::string> filepaths;
+  std::vector<double> minAreaDistortion;
+  std::vector<double> maxAreaDistortion;
+  std::vector<double> avgAreaDistortion;
+  std::vector<double> minAngleDistortion;
+  std::vector<double> maxAngleDistortion;
+  std::vector<double> avgAngleDistortion;
+  std::vector<double> trianglesFlipped;
+  std::vector<double> globalOverlap;
+  std::vector<double> seamLengths;
+  std::vector<double> numFaces;
+
+ for (size_t i = 0; i < analysisFiles.size(); i++) {
+    parseAnalysisFile(analysisFiles[i], meshnames, filepaths, minAreaDistortion, maxAreaDistortion, avgAreaDistortion,
+    minAngleDistortion, maxAngleDistortion, avgAngleDistortion, trianglesFlipped, globalOverlap, seamLengths,
+    numFaces, objFiles, std::to_string(i));
+ }
+
+  std::vector<std::vector<double>> data = {minAreaDistortion, maxAreaDistortion, avgAreaDistortion,
+              minAngleDistortion,maxAngleDistortion,avgAngleDistortion};
+  std::vector<char*> labels = {(char*)"min area distortion",(char*)"max area distortion",(char*)"avg area distortion",
+  (char*)"min angle distortion",(char*)"max angle distortion",(char*)"avg angle distortion"};
+  std::vector<std::vector<double>> additionalData = {trianglesFlipped, globalOverlap, seamLengths};
+  std::vector<std::string> additionalDataLabels = {"Triangles Flipped", "Global Overlap", "Total Seam Length"};
+
+  scatter = new polyscope::Scatterplot();
+  (*scatter).buildScatterplot(data, labels, meshnames, filepaths, additionalData, additionalDataLabels, numFaces, analysisFiles.size());
+  (*scatter).updateColormap(polyscope::gl::quantitativeColormaps[0]);
+  polyscope::show();
+}
+
+int main(int argc, char** argv) {
+  if (strcmp(argv[1],"-a") == 0) {
+    std::cout << "Generating analysis file" << std::endl;
+    std::vector<std::string> objFiles;
+    for (int i = 2; i < argc; i++) {
+      objFiles.push_back(argv[i]);
+    }
+    generateAnalysisFile(objFiles);
+
   } else if (strcmp(argv[1],"-d") == 0) {
     std::cout << "Visualizing" << std::endl;
+    polyscope::init();
+    polyscope::state::userCallback = myCallback;
 
-    std::string filename = argv[2];
-    std::ifstream in(filename);
-    if (!in) throw std::invalid_argument("Could not open mesh file " + filename);
-    
     // information that we want to parse for each mesh
     std::vector<std::string> meshnames;
     std::vector<std::string> filepaths;
@@ -122,73 +257,39 @@ int main(int argc, char** argv) {
     std::vector<double> avgAngleDistortion;
     std::vector<double> trianglesFlipped;
     std::vector<double> globalOverlap;
+    std::vector<double> seamLengths;
+    std::vector<double> numFaces;
 
-    std::string line;
-    getline(in,line); // skip first line, which only contains labels for readability
-    while (getline(in, line)) {
-      std::stringstream ss(line);
-      std::string token;
-      double minVal, maxVal, avgVal;
-      double d;
-
-      // parse name
-      ss >> token;
-      meshnames.push_back(token);
-
-      // parse filepath
-      ss >> token;
-      filepaths.push_back(token);
-
-      // parse area distortion
-      ss >> minVal >> maxVal >> avgVal;
-      minAreaDistortion.push_back(minVal);
-      maxAreaDistortion.push_back(maxVal);
-      avgAreaDistortion.push_back(avgVal);
-
-      // parse angle distortion
-      ss >> minVal >> maxVal >> avgVal;
-      minAngleDistortion.push_back(minVal);
-      maxAngleDistortion.push_back(maxVal);
-      avgAngleDistortion.push_back(avgVal);
-
-      // parse triangles flipped
-      ss >> d;
-      trianglesFlipped.push_back(d);
-      
-      // parse global overlap
-      ss >> d;
-      globalOverlap.push_back(d);
-    }
-
-    polyscope::init();
-
-     // Register the user callback 
-    polyscope::state::userCallback = myCallback;
+    parseAnalysisFile(argv[2], meshnames, filepaths, minAreaDistortion, maxAreaDistortion, avgAreaDistortion, 
+      minAngleDistortion, maxAngleDistortion, avgAngleDistortion, trianglesFlipped, globalOverlap, seamLengths, numFaces);
     
+    std::vector<std::vector<double>> data = {minAreaDistortion, maxAreaDistortion, avgAreaDistortion,
+              minAngleDistortion,maxAngleDistortion,avgAngleDistortion};
+    std::vector<char*> labels = {(char*)"min area distortion",(char*)"max area distortion",(char*)"avg area distortion",
+    (char*)"min angle distortion",(char*)"max angle distortion",(char*)"avg angle distortion"};
+    std::vector<std::vector<double>> additionalData = {trianglesFlipped, globalOverlap, seamLengths};
+    std::vector<std::string> additionalDataLabels = {"Triangles Flipped", "Global Overlap", "Total Seam Length"};
+
     scatter = new polyscope::Scatterplot();
+    (*scatter).buildScatterplot(data, labels, meshnames, filepaths, additionalData, additionalDataLabels, numFaces);
     (*scatter).updateColormap(polyscope::gl::quantitativeColormaps[0]);
-    std::vector<std::vector<double>> data;
-    data.push_back(minAreaDistortion);
-    data.push_back(maxAreaDistortion);
-    data.push_back(avgAreaDistortion);
-    data.push_back(minAngleDistortion);
-    data.push_back(maxAngleDistortion);
-    data.push_back(avgAngleDistortion);
-
-    std::vector<char*> labels;
-    labels.push_back((char*)"min area distortion");
-    labels.push_back((char*)"max area distortion");
-    labels.push_back((char*)"avg area distortion");
-    labels.push_back((char*)"min angle distortion");
-    labels.push_back((char*)"max angle distortion");
-    labels.push_back((char*)"avg angle distortion");
-
-    (*scatter).buildScatterPlot(data,labels);
-    
     polyscope::show();
 
-  } else {
+  } else if (strcmp(argv[1],"-c") == 0) {
+     std::cout << "Comparing" << std::endl;
+     polyscope::init();
+     polyscope::state::userCallback = myCallback;
+     std::vector<std::string> analysisFiles;
+     for (int i = 2; i < argc; i++) {
+       analysisFiles.push_back(argv[i]);
+     }
 
+     // find the meshes that both files share using a map
+     std::map<std::string,bool> sharedObjFiles = findSharedMeshes(analysisFiles);
+     // construct a scatterplot using only the shared meshes
+     parseAnalysisMeshes(sharedObjFiles, analysisFiles);
+
+  } else {
     // Configure the argument parser
     args::ArgumentParser parser("Polyscope sample program. See github.com/nmwsharp/polyscope/examples.");
     args::Positional<string> inFileName(parser, "input_file", "An .obj file to visualize");
@@ -249,30 +350,17 @@ int main(int argc, char** argv) {
 
     // Register the user callback 
     polyscope::state::userCallback = myCallback;
-    
     scatter = new polyscope::Scatterplot();
+    std::vector<double> xs = {1, 2, 3, 4, 5, 6};
+    std::vector<double> ys = {2, 4, 8, 16, 32, 64};
+    std::vector<double> zs = {1, 2, 3, 4, 5, 6};
+    (*scatter).buildScatterplot(xs, ys, zs);
     (*scatter).updateColormap(polyscope::gl::quantitativeColormaps[0]);
-    std::vector<double> xs;
-    std::vector<double> ys;
-    std::vector<double> zs;
-    for (int i = 0; i < 100; i++) {
-      xs.push_back(3 * unitRand() - .5);
-      ys.push_back(3 * unitRand() - .5);
-      zs.push_back(3 * unitRand() - .5);
-    }
-    //(*scatter).buildScatterplot(xs, ys, zs);
     
-    std::vector<std::vector<double>> data;
-    data.push_back(xs);
-    data.push_back(ys);
-    data.push_back(zs);
-
-    std::vector<char*> labels;
-    labels.push_back((char*)"A");
-    labels.push_back((char*)"B");
-    labels.push_back((char*)"C");
-
-    (*scatter).buildScatterPlot(data,labels);
+    std::vector<std::vector<double>> data = {xs, ys, zs};
+    std::vector<char*> labels = {(char*)"A", (char*)"B", (char*)"C"};
+    //(*scatter).buildScatterplot(data,labels);
+    //(*scatter).updateColormap(polyscope::gl::quantitativeColormaps[0]);
 
     // Give control to the polyscope gui
     polyscope::show();
