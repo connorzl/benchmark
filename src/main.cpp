@@ -11,6 +11,17 @@
 #include "geometrycentral/direction_fields.h"
 #include "geometrycentral/distortion.h"
 
+// for testing purposes
+#include "geometrycentral/tutte.h"
+#include "geometrycentral/spectral_conformal.h"
+#include "geometrycentral/least_squares_conformal.h"
+#include "geometrycentral/arap.h"
+#include "geometrycentral/quad_cover.h"
+#include "geometrycentral/stripes.h"
+#include "geometrycentral/harmonicbases.h"
+#include "geometrycentral/BHalfedgemesh.h"
+#include "polyscope/quad_mesh.h"
+
 #include "imgui.h"
 #include "args/args.hxx"
 
@@ -83,8 +94,10 @@ void generateAnalysisFile(std::vector<std::string> objFiles) {
 
     for (size_t i = 0; i < objFiles.size(); i++) {
       mesh = new HalfedgeMesh(PolygonSoupMesh(objFiles[i]), geom);
-      if (geom->paramCoords.size() == 0) continue;
-    
+      if (geom->paramCoords.size() == 0) {
+        std::cout<<"gg"<<std::endl;
+        continue;
+      }
       // Compute distortion metrics
       Distortion* d = new Distortion(mesh, geom);
       Vector3 areaDistortion = d->computeAreaScaling();
@@ -311,15 +324,79 @@ int main(int argc, char** argv) {
       std::cerr << "Please specify .obj file as argument" << std::endl;
       return EXIT_FAILURE;
     }
-
-    // Initialize polyscope
-    polyscope::init();
   
     // == Build the mesh object from the input file
     mesh = new HalfedgeMesh(PolygonSoupMesh(args::get(inFileName)), geom);
+    //Tutte t = Tutte(mesh,geom);
+    //t.computeTutteEmbedding();
+    //SpectralConformal s = SpectralConformal(mesh,geom);
+    //s.computeSpectralConformal();
+    //LSCM l = LSCM(mesh,geom);
+    //l.computeLSCM();
+    //ARAP a = ARAP(mesh,geom);
+    //a.computeARAP();
+    
+    //QuadCover Q = QuadCover(mesh,geom);
+    //VertexData<std::complex<double>> field = Q.computeCrossField();
+    //FaceData<int> singularities = Q.computeSingularities();
+    //Q.computeBranchCover();
+    //VertexData<double> offsets = Q.computeOffset();
+   
+    //Stripes S = Stripes(mesh,geom);
+    //VertexData<std::complex<double>> field = S.computeField();
+    //FaceData<int> singularities = S.computeSingularities();
+    //S.edgeData();
+    //S.computeStripes();
+
+    //VertexData<double> offsets = Q.computeOffset(); this is for quad_cover double cover
+
+    QuadMesh M = QuadMesh(mesh,geom);
+    M.computeCrossField();
+    M.computeSingularities();
+    M.computeBranchCover();
+    M.uniformize();
+    //M.computeCrossFieldCM(); // this is on original surface for practice
+    M.computeCrossFieldCMBranchCover();
+    M.computeStripes();
+    //M.textureCoordinates();
+
+    // Initialize polyscope
+    polyscope::init();
     std::string meshNiceName = polyscope::utilities::guessNiceNameFromPath(args::get(inFileName));
     polyscope::registerSurfaceMesh(meshNiceName, geom);
 
+    // moved all visualization to here
+    M.visualize();
+
+    //HarmonicBases HB = HarmonicBases(mesh,geom);
+    //std::vector<Eigen::MatrixXd> bases = HB.compute();
+    /*
+    std::vector<std::vector<HalfedgePtr>> generators = HB.generators;
+    for (size_t i = 0; i < generators.size(); i++) {
+      HalfedgeData<double> generatorEdges(mesh);
+      for (HalfedgePtr he : mesh->allHalfedges()) {
+        generatorEdges[he] = 0;
+      }
+      for (size_t j = 0; j < generators[i].size(); j++) {
+        HalfedgePtr he = generators[i][j];
+        generatorEdges[he] = 10*i+10;
+      }
+      std::string name = "Generator " + std::to_string(i);
+      polyscope::getSurfaceMesh()->addQuantity(name,generatorEdges);
+    }
+    Eigen::MatrixXd omega = HB.bases[0];
+    EdgeData<size_t> edgeIndices = mesh->getEdgeIndices();
+    EdgeData<double> data(mesh);
+    for (EdgePtr e : mesh->edges()) {
+      size_t index = edgeIndices[e];
+      data[e] = omega(index,0);
+    }
+    polyscope::getSurfaceMesh()->addVectorQuantity("1-form on edges", data);
+
+    FaceData<std::complex<double>> X = HB.visualize();
+    polyscope::getSurfaceMesh()->addVectorQuantity("Harmonic Field", X);
+    */
+    
     // == Add Distortion Data to Mesh, if any
     if (geom->paramCoords.size() > 0) {
       Distortion* d = new Distortion(mesh, geom);
@@ -347,8 +424,19 @@ int main(int argc, char** argv) {
       size_t seamLength = d->computeSeamLength();
       std::cout << "TOTAL SEAM LENGTH: " << seamLength << std::endl;
     }
+    
+    // branch cover visualization
+    //for (VertexPtr v : mesh->vertices()) {
+    //  offsets[v] = std::abs(offsets[v]);
+    //}
+    //polyscope::getSurfaceMesh()->addDistanceQuantity("Offsets", offsets);
 
+    // Give control to the polyscope gui
+    polyscope::show();
+    
+    
     // Register the user callback 
+    /*
     polyscope::state::userCallback = myCallback;
     scatter = new polyscope::Scatterplot();
     std::vector<double> xs = {1, 2, 3, 4, 5, 6};
@@ -356,15 +444,12 @@ int main(int argc, char** argv) {
     std::vector<double> zs = {1, 2, 3, 4, 5, 6};
     (*scatter).buildScatterplot(xs, ys, zs);
     (*scatter).updateColormap(polyscope::gl::quantitativeColormaps[0]);
-    
     std::vector<std::vector<double>> data = {xs, ys, zs};
     std::vector<char*> labels = {(char*)"A", (char*)"B", (char*)"C"};
-    //(*scatter).buildScatterplot(data,labels);
-    //(*scatter).updateColormap(polyscope::gl::quantitativeColormaps[0]);
-
-    // Give control to the polyscope gui
-    polyscope::show();
+    
+    (*scatter).buildScatterplot(data,labels);
+    (*scatter).updateColormap(polyscope::gl::quantitativeColormaps[0]);
+    */
   }
   return EXIT_SUCCESS;
-
 }
