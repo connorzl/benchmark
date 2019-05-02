@@ -226,6 +226,50 @@ void SurfaceScalarVertexQuantity::buildInfoGUI(VertexPtr v) {
 }
 
 // ========================================================
+// ==========           Stripes Scalar           ==========
+// ========================================================
+
+SurfaceScalarStripesQuantity::SurfaceScalarStripesQuantity(std::string name, FaceData<std::vector<Vector2>>& values_,
+                                                         SurfaceMesh* mesh_, DataType dataType_)
+    : SurfaceScalarQuantity(name, mesh_, "vertex", dataType_) // is vertex here right?
+
+{
+  values = parent->transfer.transfer(values_);
+
+  std::vector<double> valsVec;
+  hist.updateColormap(gl::quantitativeColormaps[iColorMap]);
+  hist.buildHistogram(valsVec);
+
+  std::tie(dataRangeLow, dataRangeHigh) = robustMinMax(valsVec, 1e-5);
+  resetVizRange();
+}
+
+gl::GLProgram* SurfaceScalarStripesQuantity::createProgram() {
+  // Create the program to draw this quantity
+  gl::GLProgram* program =
+      new gl::GLProgram(&VERTSTRIPES_SURFACE_VERT_SHADER, &VERTSTRIPES_SURFACE_FRAG_SHADER, gl::DrawMode::Triangles);
+
+  // Fill color buffers
+  fillColorBuffers(program);
+
+  return program;
+}
+
+
+void SurfaceScalarStripesQuantity::fillColorBuffers(gl::GLProgram* p) {
+  std::vector<Vector2> texCoord;
+  for (FacePtr f : parent->mesh->faces()) { // can't tell singular faces here
+    std::vector<Vector2> coords = values[f];
+    for (size_t i = 0; i < coords.size(); i++) {
+      texCoord.push_back(coords[i]);
+    }
+  }
+
+  // Store data in buffers
+  p->setAttribute("a_texcoord", texCoord);
+}
+
+// ========================================================
 // ==========            Face Scalar             ==========
 // ========================================================
 

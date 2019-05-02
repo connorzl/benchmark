@@ -358,7 +358,7 @@ int main(int argc, char** argv) {
     //M.computeCrossFieldCM(); // this is on original surface for practice
     M.computeCrossFieldCMBranchCover();
     M.computeStripes();
-    //M.textureCoordinates();
+    M.textureCoordinates(); 
 
     // Initialize polyscope
     polyscope::init();
@@ -433,7 +433,6 @@ int main(int argc, char** argv) {
 
     // Give control to the polyscope gui
     polyscope::show();
-    
     
     // Register the user callback 
     /*

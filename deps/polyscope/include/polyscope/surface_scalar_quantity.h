@@ -54,6 +54,24 @@ public:
 };
 
 // ========================================================
+// ==========          Stripes Scalar            ==========
+// ========================================================
+
+class SurfaceScalarStripesQuantity : public SurfaceScalarQuantity {
+public:
+  SurfaceScalarStripesQuantity(std::string name, FaceData<std::vector<Vector2>>& values_, SurfaceMesh* mesh_,
+                              DataType dataType_ = DataType::STANDARD);
+  //   ~SurfaceScalarVertexQuantity();
+
+  virtual gl::GLProgram* createProgram() override;
+
+  void fillColorBuffers(gl::GLProgram* p);
+
+  // === Members
+  FaceData<std::vector<Vector2>> values;
+};
+
+// ========================================================
 // ==========            Face Scalar             ==========
 // ========================================================
 

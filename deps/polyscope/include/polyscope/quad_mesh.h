@@ -1,15 +1,11 @@
 #pragma once
 
+#include "polyscope/polyscope.h"
 #include "geometrycentral/halfedge_mesh.h"
 #include "geometrycentral/geometry.h"
 #include "geometrycentral/polygon_soup_mesh.h"
 #include "geometrycentral/operators.h"
 #include "geometrycentral/BHalfedgemesh.h"
-
-#include "polyscope/polyscope.h"
-#include "polyscope/gl/gl_utils.h"
-#include "polyscope/gl/colormap_sets.h"
-#include "polyscope/gl/shaders/scatterplot_shaders.h"
 
 using namespace geometrycentral;
 
@@ -36,6 +32,7 @@ class QuadMesh {
         HalfedgeMesh* mesh;
         Geometry<Euclidean>* geom;
 
+        // constants
         int nPowerIterations = 20;
         double eps = std::pow(10.,-8.);
         int n = 4;
@@ -51,34 +48,39 @@ class QuadMesh {
         Eigen::SparseMatrix<std::complex<double>> assembleA();
         void computeSmoothestField(Eigen::SparseMatrix<std::complex<double>> M, Eigen::SparseMatrix<std::complex<double>> A);
 
+        // branch cover quantities
         VertexData<int> singularities;
         HalfedgeData<int> eta;
         int numSingularities = 0;
 
-        // uniformization results
+        // uniformization quantities
         EdgeData<double> edgeLengthsCM;
         HalfedgeData<std::complex<double>> thetaCM;
         HalfedgeData<std::complex<double>> rCM;
         HalfedgeData<double> cmAngles;
         VertexData<double> curvatures;
-        
-        // cross field
+
+        // uniformization helpers
+        void setupCM();
+
+        // cross field quantities
         FaceData<std::complex<double>> fieldCM;    // field computed on original surface
         std::vector<FaceData<std::complex<double>>> branchCoverFields; // field computed on branch cover
         BranchCoverTopology BC;
         double scale = 1;
 
-        // stripes
+        // stripes helpers
         void computeOmega();
         Eigen::SparseMatrix<double> energyMatrix();
         Eigen::SparseMatrix<double> massMatrix();
+
+        // stripes quantities
         std::vector<EdgeData<double>> omega;
         std::vector<VertexData<size_t>> BVertexIndices;
 
-        // texture coordinates
+        // texture coordinates quantities
         std::vector<VertexData<std::complex<double>>> psi;
-        std::vector<VertexData<double>> coords;
+        std::vector<VertexData<double>> coords;   // these are the direct coords 
+        FaceData<std::vector<Vector2>> texCoords;    
 
-        // helpers
-        void setupCM();
 };

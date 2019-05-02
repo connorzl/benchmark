@@ -7,7 +7,7 @@
 QuadMesh::QuadMesh(HalfedgeMesh* m, Geometry<Euclidean>* g) : mesh(m), geom(g), theta(m), r(m), field(m), 
                                                                 singularities(m), eta(m),
                                                                 edgeLengthsCM(m), thetaCM(m), rCM(m), cmAngles(m),
-                                                                curvatures(m), fieldCM(m) {
+                                                                curvatures(m), fieldCM(m), texCoords(m) {
     assert(mesh->nBoundaryLoops() == 0);
 
     for (int i = 0; i < n; i++) {
@@ -656,10 +656,7 @@ void QuadMesh::computeStripes() {
     // store field and naive coords
     for (int i = 0; i < 2; i++) {
         for (VertexPtr v : mesh->vertices()) {
-            size_t sheet = i;
-            if (singularities[v] != 0) {
-                sheet = BC.singularSheet;
-            } 
+            int sheet = (singularities[v] == 0) ? i : BC.singularSheet;
             size_t index = BVertexIndices[sheet][v];
             double real = x(2*index,0);
             double imag = x(2*index+1,0);
@@ -671,13 +668,54 @@ void QuadMesh::computeStripes() {
     }
 }
 
+
 void QuadMesh::textureCoordinates() {
     std::cout << "Computing texture coordinates...";
+    FaceData<std::vector<double>> xCoords(mesh);
+    FaceData<std::vector<double>> yCoords(mesh);
+    FaceData<int> singularFace(mesh);
+
+    /*
+    std::vector<BEdge> allBEdges = BC.allEdges();
+    std::vector<EdgeData<double>> sigma;
+    for (size_t i = 0; i < 2; i++) {
+        EdgeData<double> s(mesh);
+        sigma.push_back(s);
+    }
+
+    for (BEdge Be : allBEdges) {
+        if (Be.sheet != 0 && Be.sheet != 1) continue;
+        auto getPsi = [&](BVertex Bv, std::complex<double> &z) {
+            if (Bv.sheet == 0 || Bv.sheet == 1) {
+                z = psi[Bv.sheet][Bv.v];
+            } else if (Bv.sheet == 2) {
+                z = std::conj(psi[0][Bv.v]);
+            } else {
+                assert(Bv.sheet == 3);
+                z = std::conj(psi[1][Bv.v]);
+            }
+        };
+
+        BHalfedge BHe = Be.halfedge();
+        BVertex Bv_i = BHe.vertex();
+        BVertex Bv_j = BHe.twin().vertex();
+
+        std::complex<double> z_i, z_j;
+        getPsi(Bv_i, z_i);
+        getPsi(Bv_j, z_j);
+
+        double w_ij = omega[Be.sheet][Be.e];
+
+        double y = (std::arg(z_i) - std::arg(z_j) + w_ij) / (2*PI);
+        double n_ij = std::round(y);
+
+        sigma[Be.sheet][Be.e] = std::arg(z_j) - std::arg(z_i) + 2*PI * n_ij;
+    }*/
 
     std::vector<BFace> allBFaces = BC.allFaces();
     for (BFace Bf : allBFaces) {
         // sheet 0 = x coordinate, sheet 1 = y coordinate
-        if (Bf.sheet != 0 && Bf.sheet != 1) continue;
+        if (Bf.sheet != 0 && Bf.sheet != 1) continue; // need to fill in default quantities here i think
 
         // grab halfedges, vertices, and edges
         BHalfedge Bhe_ij = Bf.halfedge();
@@ -694,7 +732,10 @@ void QuadMesh::textureCoordinates() {
 
         // skip singularities for now
         if (singularities[Bv_i.v] != 0 || singularities[Bv_j.v] != 0 || singularities[Bv_k.v] != 0) {
+            singularFace[Bf.f] = 1;
             continue;
+        } else {
+            singularFace[Bf.f] = 0;
         }
 
         // get orientations of edges
@@ -704,7 +745,7 @@ void QuadMesh::textureCoordinates() {
 
         // get 1-form omega at each edge
         double w_ij = c_ij * omega[Be_ij.sheet][Be_ij.e];
-        double w_jk = c_jk * omega[Be_jk.sheet][Be_jk.e];
+        double w_jk = c_jk * omega[Be_ij.sheet][Be_ij.e];
         double w_ki = c_ki * omega[Be_ki.sheet][Be_ki.e];
 
         auto getPsi = [&](BVertex Bv, std::complex<double> &z) {
@@ -723,13 +764,53 @@ void QuadMesh::textureCoordinates() {
         getPsi(Bv_i, z_i);
         getPsi(Bv_j, z_j);
         getPsi(Bv_k, z_k);
+        /*
+        // move sigmas into class later
+        auto getSigma = [&](BEdge Be) -> double {
+            if (Be.sheet == 0 || Be.sheet == 1) {
+                return sigma[Be.sheet][Be.e];
+            } else if (Be.sheet == 2) {
+                return -sigma[0][Be.e];
+            } else {
+                assert(Be.sheet == 3);
+                return -sigma[1][Be.e];
+            }
+        };
+        double sigma_ij = c_ij * getSigma(Be_ij);
+        double sigma_ki = c_ki * getSigma(Be_ki);
+        */
 
         // compute coordinates
-        coords[Bf.sheet][Bv_i.v] = std::arg(z_i);
-        coords[Bf.sheet][Bv_j.v] = std::arg(z_i) + 2 * PI * std::floor(w_ij);
-        coords[Bf.sheet][Bv_k.v] = std::arg(z_i) + 2 * PI * std::floor(w_ki);
+        std::complex<double> i(0,1);
+        double c_i = std::arg(z_i);
+        double c_j = c_i + w_ij - std::arg(std::exp(i * w_ij) * z_i / z_j);
+        double c_k = c_j + w_jk - std::arg(std::exp(i * w_jk) * z_j / z_k);
+        // singularities for integrating direction
+   
+        std::vector<double> currCoords = {c_i, c_j, c_k};
+        if (Bf.sheet == 0) {
+            xCoords[Bf.f] = currCoords;
+        } else {
+            yCoords[Bf.f] = currCoords;
+        }
     }
 
+    // prepare data for shader
+    for (FacePtr f : mesh->faces()) {
+        std::vector<double> xs = xCoords[f];
+        std::vector<double> ys = yCoords[f];
+        std::vector<Vector2> coords; 
+        for (size_t i = 0; i < 3; i++) {
+            Vector2 vertCoords;
+            if (singularFace[f] != 0) {   
+                vertCoords = {0, 0}; // default value for singularities
+            } else {
+                vertCoords = {.x = xs[i], .y = ys[i]};
+            }
+            coords.push_back(vertCoords);
+        } 
+        texCoords[f] = coords;
+    }
     std::cout << "Done!" << std::endl;
 }
 
@@ -739,9 +820,7 @@ void QuadMesh::visualize() {
 
     // singularities
     VertexData<Vector3> singularityColors(mesh);
-    int sum = 0;
     for (VertexPtr v : mesh->vertices()) {
-      sum += singularities[v];
       if (singularities[v] == 1) {
         singularityColors[v] = Vector3{1,0,0};
       } else if (singularities[v] == -1) {
@@ -753,7 +832,7 @@ void QuadMesh::visualize() {
     polyscope::getSurfaceMesh()->addColorQuantity("Singularities", singularityColors);
 
     // curvatures post-uniformization
-    polyscope::getSurfaceMesh()->addQuantity("Curvatures", curvatures);
+    //polyscope::getSurfaceMesh()->addQuantity("Curvatures", curvatures);
 
     // cross frame on branch cover
     for (int i = 0; i < 4; i++) {
@@ -761,7 +840,10 @@ void QuadMesh::visualize() {
     }
     //polyscope::getSurfaceMesh()->addVectorQuantity("Cone Metric Cross Field", fieldCM, 4); this was for practice
 
-    // stripe coords
+    // direct stripe coords
     polyscope::getSurfaceMesh()->addQuantity("X Coords", coords[0]);
     polyscope::getSurfaceMesh()->addQuantity("Y Coords", coords[1]);
+
+    // fingers crossed
+    polyscope::getSurfaceMesh()->addQuantity("stripes shader", texCoords);
 }
