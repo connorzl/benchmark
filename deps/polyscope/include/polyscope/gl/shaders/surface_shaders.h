@@ -486,15 +486,23 @@ static const FragShader VERTSTRIPES_SURFACE_FRAG_SHADER = {
 
       void main()
       {
-        float checkSize = 1.0;
-        
+        // for drawing quads
+        float checkSize = 1.0 / (2.0 * 3.14159265359);
         // mod by 2 to get even or odd tile
         float fmodResult = mod(floor(checkSize * Texcoord.x) + floor(checkSize * Texcoord.y), 2.0);
-        
         // make sure result is >= 0
         float fin = max(sign(fmodResult), 0.0);
         vec3 color = vec3(fin, fin, fin);
 
+        // for drawing isolines
+        float width = 0.1;
+        if (abs(mod(Texcoord.x, 2.0 * 3.14159265359)) < width || abs(mod(Texcoord.y, 2.0 * 3.14159265359)) < width) {
+            color = vec3(0, 0, 0);
+        } else {
+            color = vec3(1.0,1.0,1.0);
+        }
+
+        // pass color into output
         outputF = lightSurface(Position, Normal, color, u_lightCenter, u_lightDist, u_eye);
       }
     )

@@ -7,7 +7,7 @@
 QuadMesh::QuadMesh(HalfedgeMesh* m, Geometry<Euclidean>* g) : mesh(m), geom(g), theta(m), r(m), field(m), 
                                                                 singularities(m), eta(m),
                                                                 edgeLengthsCM(m), thetaCM(m), rCM(m), cmAngles(m),
-                                                                curvatures(m), fieldCM(m), texCoords(m) {
+                                                                cmAreas(m), curvatures(m), fieldCM(m), texCoords(m) {
     assert(mesh->nBoundaryLoops() == 0);
 
     for (int i = 0; i < n; i++) {
@@ -325,6 +325,16 @@ void QuadMesh::uniformize() {
         curvatures[v] = K(vertexIndices[v],0);        
     }
     std::cout << "Done!" << std::endl;
+
+    // store new areas for CM mass matrix
+    for (FacePtr f : mesh->faces()) {
+        double l_ij = edgeLengthsCM[f.halfedge().edge()       ];
+        double l_jk = edgeLengthsCM[f.halfedge().next().edge()];
+        double l_ki = edgeLengthsCM[f.halfedge().prev().edge()];
+
+        double s = (l_ij + l_jk + l_ki) / 2.0;
+        cmAreas[f] = sqrt( s * (s - l_ij) * (s - l_jk) * (s - l_ki) );
+    }
 }
 
 void QuadMesh::setupCM() {
@@ -446,7 +456,7 @@ void QuadMesh::computeCrossFieldCMBranchCover() {
     BFace root = allBFaces[0];
     std::map<BFace,bool> visited;
     visited[root] = true;
-    branchCoverFields[root.sheet][root.f] = std::complex<double>(0,1);
+    branchCoverFields[root.sheet][root.f] = std::complex<double>(0,1);  // this is a degree of freedom
 
     std::queue<BFace> Q;
     Q.push(root);
@@ -470,7 +480,6 @@ void QuadMesh::computeCrossFieldCMBranchCover() {
         } while (BHe != currFace.halfedge());
     }
     if (count != allBFaces.size()) throw std::logic_error("BFS did not traverse all BFaces");
-        
     std::cout << "Done!" << std::endl;
 }
 
@@ -492,8 +501,8 @@ void QuadMesh::computeOmega() {
         std::complex<double> f_ji = scale * branchCoverFields[he_ji.sheet][he_ji.face().f];
 
         std::complex<double> e_ij = thetaCM[he_ij.he];
-        std::complex<double> e_ji = rCM[he_ji.he] * e_ij;
-        //std::complex<double> e_ji = -thetaCM[he_ji.he];
+        //std::complex<double> e_ji = rCM[he_ji.he] * e_ij;
+        std::complex<double> e_ji = -thetaCM[he_ji.he];
 
         double prod_ij = e_ij.real() * f_ij.real() + e_ij.imag() * f_ij.imag();
         double prod_ji = e_ji.real() * f_ji.real() + e_ji.imag() * f_ji.imag();
@@ -562,16 +571,16 @@ Eigen::SparseMatrix<double> QuadMesh::energyMatrix() {
 
         // add diagonal entries
         triplets.push_back( Eigen::Triplet<double>(iA_re,iA_re,w) );
-        triplets.push_back( Eigen::Triplet<double>(iA_im,iA_im,sA_im * sB_im * w) );
+        triplets.push_back( Eigen::Triplet<double>(iA_im,iA_im,w) ); // multiply by sA_im and sB_im?
 
         // transport coefficient components
         BEdge Be = BHe.edge();
-        double sign = 1;
-        if (Be.halfedge() != BHe) sign = -1;
-        double x = w * cos(sign * omega[Be.sheet][Be.e]);
-        double yA = sA_im * w * sin(sign * omega[Be.sheet][Be.e]);
-        double yB = sB_im * w * sin(sign * omega[Be.sheet][Be.e]);
-        double xAB = sA_im * sB_im * w * cos(sign * omega[Be.sheet][Be.e]);
+        double sign = (Be.halfedge() == BHe) ? 1 : -1;
+        double omega_ij = sign * omega[Be.sheet][Be.e];
+        double x = w * cos(omega_ij);
+        double yA = sA_im * w * sin(omega_ij);
+        double yB = sB_im * w * sin(omega_ij);
+        double xAB = sA_im * sB_im * w * cos(omega_ij);
     
         // add non-diagonal entries
         triplets.push_back( Eigen::Triplet<double>(iA_re,iB_re,-x) ); triplets.push_back( Eigen::Triplet<double>(iA_re,iB_im,-yB ) );
@@ -588,18 +597,18 @@ Eigen::SparseMatrix<double> QuadMesh::massMatrix() {
     std::vector<Eigen::Triplet<double>> triplets;
 
     auto getIndexData = [&](BVertex Bv, size_t& realInd, size_t& imagInd) {
-            bool v_singular = (singularities[Bv.v] != 0);
-            if (v_singular) {  
-                assert(Bv.sheet == BC.singularSheet);
-                realInd = 2 * BVertexIndices[BC.singularSheet][Bv.v];    // all singularities live on a single sheet (0)
-            } else if ((!v_singular && Bv.sheet == 0) || (!v_singular && Bv.sheet == 1)) {
-                realInd = 2 * BVertexIndices[Bv.sheet][Bv.v];            // sheet 0 and 1 treated as normal
-            } else if (!v_singular && Bv.sheet == 2) {
-                realInd = 2 * BVertexIndices[0][Bv.v];                   // sheet 2 shares indices with sheet 0
-            } else if (!v_singular && Bv.sheet == 3) {
-                realInd = 2 * BVertexIndices[1][Bv.v];                   // sheet 3 shares indices with sheet 1
-            }
-            imagInd = realInd+1;
+        bool v_singular = (singularities[Bv.v] != 0);
+        if (v_singular) {  
+            assert(Bv.sheet == BC.singularSheet);
+            realInd = 2 * BVertexIndices[BC.singularSheet][Bv.v];    // all singularities live on a single sheet (0)
+        } else if ((!v_singular && Bv.sheet == 0) || (!v_singular && Bv.sheet == 1)) {
+            realInd = 2 * BVertexIndices[Bv.sheet][Bv.v];            // sheet 0 and 1 treated as normal
+        } else if (!v_singular && Bv.sheet == 2) {
+            realInd = 2 * BVertexIndices[0][Bv.v];                   // sheet 2 shares indices with sheet 0
+        } else if (!v_singular && Bv.sheet == 3) {
+            realInd = 2 * BVertexIndices[1][Bv.v];                   // sheet 3 shares indices with sheet 1
+        }
+        imagInd = realInd+1;
     };
     
     std::vector<BFace> allBFaces = BC.allFaces();
@@ -613,7 +622,7 @@ Eigen::SparseMatrix<double> QuadMesh::massMatrix() {
         getIndexData(BHe.next().next().vertex(), iC_re, iC_im);
 
         // TODO use heron's formula on flattened edge lengths
-        double area = geom->area(Bf.f);
+        double area = geom->area(Bf.f);              //cmAreas[Bf.f]
         triplets.push_back(Eigen::Triplet<double>(iA_re, iA_re, area/3.));
         triplets.push_back(Eigen::Triplet<double>(iA_im, iA_im, area/3.));
         triplets.push_back(Eigen::Triplet<double>(iB_re, iB_re, area/3.));
@@ -627,13 +636,11 @@ Eigen::SparseMatrix<double> QuadMesh::massMatrix() {
 
 void QuadMesh::computeStripes() {
     std::cout << "Computing Stripes..." << std::endl;
-    // compute 1-form
+    // compute 1-form and build matrices
     computeOmega();
-    // build matrices
     Eigen::SparseMatrix<double> A = energyMatrix();
     Eigen::SparseMatrix<double> B = massMatrix();
-    
-    // LL^T <- Cholesky(A)
+
     Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver;
     solver.compute(A);
 
@@ -653,7 +660,7 @@ void QuadMesh::computeStripes() {
     }
     std::cout << "Done!" << std::endl;
 
-    // store field and naive coords
+    // store resulting field and naive coords
     for (int i = 0; i < 2; i++) {
         for (VertexPtr v : mesh->vertices()) {
             int sheet = (singularities[v] == 0) ? i : BC.singularSheet;
@@ -668,49 +675,22 @@ void QuadMesh::computeStripes() {
     }
 }
 
+std::complex<double> QuadMesh::getPsi(BVertex Bv) {
+    if (Bv.sheet == 0 || Bv.sheet == 1) {
+        return psi[Bv.sheet][Bv.v];
+    } else if (Bv.sheet == 2) {
+        return std::conj(psi[0][Bv.v]);
+    } else {
+        assert(Bv.sheet == 3);
+        return std::conj(psi[1][Bv.v]);
+    }
+}
 
 void QuadMesh::textureCoordinates() {
     std::cout << "Computing texture coordinates...";
     FaceData<std::vector<double>> xCoords(mesh);
     FaceData<std::vector<double>> yCoords(mesh);
     FaceData<int> singularFace(mesh);
-
-    /*
-    std::vector<BEdge> allBEdges = BC.allEdges();
-    std::vector<EdgeData<double>> sigma;
-    for (size_t i = 0; i < 2; i++) {
-        EdgeData<double> s(mesh);
-        sigma.push_back(s);
-    }
-
-    for (BEdge Be : allBEdges) {
-        if (Be.sheet != 0 && Be.sheet != 1) continue;
-        auto getPsi = [&](BVertex Bv, std::complex<double> &z) {
-            if (Bv.sheet == 0 || Bv.sheet == 1) {
-                z = psi[Bv.sheet][Bv.v];
-            } else if (Bv.sheet == 2) {
-                z = std::conj(psi[0][Bv.v]);
-            } else {
-                assert(Bv.sheet == 3);
-                z = std::conj(psi[1][Bv.v]);
-            }
-        };
-
-        BHalfedge BHe = Be.halfedge();
-        BVertex Bv_i = BHe.vertex();
-        BVertex Bv_j = BHe.twin().vertex();
-
-        std::complex<double> z_i, z_j;
-        getPsi(Bv_i, z_i);
-        getPsi(Bv_j, z_j);
-
-        double w_ij = omega[Be.sheet][Be.e];
-
-        double y = (std::arg(z_i) - std::arg(z_j) + w_ij) / (2*PI);
-        double n_ij = std::round(y);
-
-        sigma[Be.sheet][Be.e] = std::arg(z_j) - std::arg(z_i) + 2*PI * n_ij;
-    }*/
 
     std::vector<BFace> allBFaces = BC.allFaces();
     for (BFace Bf : allBFaces) {
@@ -748,38 +728,11 @@ void QuadMesh::textureCoordinates() {
         double w_jk = c_jk * omega[Be_ij.sheet][Be_ij.e];
         double w_ki = c_ki * omega[Be_ki.sheet][Be_ki.e];
 
-        auto getPsi = [&](BVertex Bv, std::complex<double> &z) {
-            if (Bv.sheet == 0 || Bv.sheet == 1) {
-                z = psi[Bv.sheet][Bv.v];
-            } else if (Bv.sheet == 2) {
-                z = std::conj(psi[0][Bv.v]);
-            } else {
-                assert(Bv.sheet == 3);
-                z = std::conj(psi[1][Bv.v]);
-            }
-        };
-
         // get the vectors at each vertex
-        std::complex<double> z_i, z_j, z_k;
-        getPsi(Bv_i, z_i);
-        getPsi(Bv_j, z_j);
-        getPsi(Bv_k, z_k);
-        /*
-        // move sigmas into class later
-        auto getSigma = [&](BEdge Be) -> double {
-            if (Be.sheet == 0 || Be.sheet == 1) {
-                return sigma[Be.sheet][Be.e];
-            } else if (Be.sheet == 2) {
-                return -sigma[0][Be.e];
-            } else {
-                assert(Be.sheet == 3);
-                return -sigma[1][Be.e];
-            }
-        };
-        double sigma_ij = c_ij * getSigma(Be_ij);
-        double sigma_ki = c_ki * getSigma(Be_ki);
-        */
-
+        std::complex<double> z_i = getPsi(Bv_i);
+        std::complex<double> z_j = getPsi(Bv_j);
+        std::complex<double> z_k = getPsi(Bv_k);
+        
         // compute coordinates
         std::complex<double> i(0,1);
         double c_i = std::arg(z_i);
@@ -832,7 +785,7 @@ void QuadMesh::visualize() {
     polyscope::getSurfaceMesh()->addColorQuantity("Singularities", singularityColors);
 
     // curvatures post-uniformization
-    //polyscope::getSurfaceMesh()->addQuantity("Curvatures", curvatures);
+    polyscope::getSurfaceMesh()->addQuantity("Curvatures", curvatures);
 
     // cross frame on branch cover
     for (int i = 0; i < 4; i++) {
@@ -843,6 +796,12 @@ void QuadMesh::visualize() {
     // direct stripe coords
     polyscope::getSurfaceMesh()->addQuantity("X Coords", coords[0]);
     polyscope::getSurfaceMesh()->addQuantity("Y Coords", coords[1]);
+
+    // omega
+    polyscope::getSurfaceMesh()->addVectorQuantity("omega 0", omega[0]);
+    polyscope::getSurfaceMesh()->addVectorQuantity("omega 1", omega[1]);
+    polyscope::getSurfaceMesh()->addVectorQuantity("omega 2", omega[2]);
+    polyscope::getSurfaceMesh()->addVectorQuantity("omega 3", omega[3]);
 
     // fingers crossed
     polyscope::getSurfaceMesh()->addQuantity("stripes shader", texCoords);

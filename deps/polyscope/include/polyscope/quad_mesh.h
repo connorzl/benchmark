@@ -58,6 +58,7 @@ class QuadMesh {
         HalfedgeData<std::complex<double>> thetaCM;
         HalfedgeData<std::complex<double>> rCM;
         HalfedgeData<double> cmAngles;
+        FaceData<double> cmAreas;
         VertexData<double> curvatures;
 
         // uniformization helpers
@@ -78,9 +79,11 @@ class QuadMesh {
         std::vector<EdgeData<double>> omega;
         std::vector<VertexData<size_t>> BVertexIndices;
 
+        // texture coordinates helpers
+        std::complex<double> getPsi(BVertex Bv);
+
         // texture coordinates quantities
         std::vector<VertexData<std::complex<double>>> psi;
         std::vector<VertexData<double>> coords;   // these are the direct coords 
         FaceData<std::vector<Vector2>> texCoords;    
-
 };
