@@ -6,6 +6,7 @@
 #include "geometrycentral/polygon_soup_mesh.h"
 #include "geometrycentral/operators.h"
 #include "geometrycentral/BHalfedgemesh.h"
+#include "geometrycentral/linear_solvers.h"
 
 using namespace geometrycentral;
 
@@ -18,7 +19,6 @@ class QuadMesh {
         
         // cone metric
         void uniformize();
-        void computeCrossFieldCM();  // not really needed anymore 
         void computeCrossFieldCMBranchCover();
         
         // stripes
@@ -63,12 +63,13 @@ class QuadMesh {
 
         // uniformization helpers
         void setupCM();
+        double updateAreas();
 
         // cross field quantities
         FaceData<std::complex<double>> fieldCM;    // field computed on original surface
         std::vector<FaceData<std::complex<double>>> branchCoverFields; // field computed on branch cover
         BranchCoverTopology BC;
-        double scale = 1;
+        double scale = 100;
 
         // stripes helpers
         void computeOmega();
@@ -81,9 +82,15 @@ class QuadMesh {
 
         // texture coordinates helpers
         std::complex<double> getPsi(BVertex Bv);
+        double getSigma(BEdge Be);
+        void computeSigma();
 
         // texture coordinates quantities
         std::vector<VertexData<std::complex<double>>> psi;
-        std::vector<VertexData<double>> coords;   // these are the direct coords 
+        std::vector<VertexData<double>> coords;           // these are the direct coords 
+        std::vector<EdgeData<double>> sigma;
         FaceData<std::vector<Vector2>> texCoords;    
+        FaceData<int> zeros;
+
+        EdgeData<double> errors; 
 };

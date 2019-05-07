@@ -349,19 +349,17 @@ int main(int argc, char** argv) {
     //S.computeStripes();
 
     //VertexData<double> offsets = Q.computeOffset(); this is for quad_cover double cover
-
+    polyscope::init();
     QuadMesh M = QuadMesh(mesh,geom);
     M.computeCrossField();
     M.computeSingularities();
     M.computeBranchCover();
     M.uniformize();
-    //M.computeCrossFieldCM(); // this is on original surface for practice
     M.computeCrossFieldCMBranchCover();
     M.computeStripes();
     M.textureCoordinates(); 
 
     // Initialize polyscope
-    polyscope::init();
     std::string meshNiceName = polyscope::utilities::guessNiceNameFromPath(args::get(inFileName));
     polyscope::registerSurfaceMesh(meshNiceName, geom);
 

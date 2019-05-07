@@ -496,7 +496,9 @@ static const FragShader VERTSTRIPES_SURFACE_FRAG_SHADER = {
 
         // for drawing isolines
         float width = 0.1;
-        if (abs(mod(Texcoord.x, 2.0 * 3.14159265359)) < width || abs(mod(Texcoord.y, 2.0 * 3.14159265359)) < width) {
+        float two_pi = 2.0 * 3.14159265359;
+        if ( (mod(Texcoord.x, two_pi)) < width || (mod(Texcoord.x, two_pi)) > two_pi - width ||
+            (mod(Texcoord.y, two_pi)) < width || (mod(Texcoord.y, two_pi)) > two_pi - width ) {
             color = vec3(0, 0, 0);
         } else {
             color = vec3(1.0,1.0,1.0);
