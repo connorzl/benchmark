@@ -350,22 +350,44 @@ int main(int argc, char** argv) {
 
     //VertexData<double> offsets = Q.computeOffset(); this is for quad_cover double cover
     polyscope::init();
+    std::string meshNiceName = polyscope::utilities::guessNiceNameFromPath(args::get(inFileName));
+    polyscope::registerSurfaceMesh(meshNiceName, geom);
+    polyscope::getSurfaceMesh()->enabled = true;
+
     QuadMesh M = QuadMesh(mesh,geom);
     M.computeCrossField();
     M.computeSingularities();
     M.computeBranchCover();
     M.uniformize();
     M.computeCrossFieldCMBranchCover();
-    M.computeStripes();
-    M.textureCoordinates(); 
-
-    // Initialize polyscope
-    std::string meshNiceName = polyscope::utilities::guessNiceNameFromPath(args::get(inFileName));
-    polyscope::registerSurfaceMesh(meshNiceName, geom);
-
-    // moved all visualization to here
     M.visualize();
-
+    polyscope::show();
+    /*
+    M.computeStripes();
+    M.textureCoordinates();
+    */
+    
+    std::complex<double> i(0,1);
+    //std::ofstream outfile ("eigenvalues.txt");
+    double scale = 16 * PI;
+    std::complex<double> init(1,0);
+    // 32, 122, 212, 302 for bunny
+    for (int t = 0; t < 90; t+=1) {
+      double rad = t * (PI / 180.0);
+      std::complex<double> rot = std::exp(i * rad);
+      M.computeCrossFieldCMBranchCover(rot * init);
+      double lambda = M.computeStripes(scale);
+      std::cout << "rotation and lambda: " << t << "," << lambda << std::endl;
+      //outfile << lambda << std::endl;
+      M.textureCoordinates();
+      M.visualize();
+      polyscope::screenshot();
+      //break;
+    }
+    //outfile.close();
+    
+    polyscope::show();
+    
     //HarmonicBases HB = HarmonicBases(mesh,geom);
     //std::vector<Eigen::MatrixXd> bases = HB.compute();
     /*
@@ -428,9 +450,6 @@ int main(int argc, char** argv) {
     //  offsets[v] = std::abs(offsets[v]);
     //}
     //polyscope::getSurfaceMesh()->addDistanceQuantity("Offsets", offsets);
-
-    // Give control to the polyscope gui
-    polyscope::show();
     
     // Register the user callback 
     /*

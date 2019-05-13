@@ -933,7 +933,7 @@ void screenshot(std::string filename, bool transparentBG) {
 }
 
 void screenshot(bool transparentBG) {
-
+  view::resetCameraToDefault();
   char buff[50];
   snprintf(buff, 50, "screenshot_%06zu.png", state::screenshotInd);
   std::string defaultName(buff);

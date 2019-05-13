@@ -19,11 +19,11 @@ class QuadMesh {
         
         // cone metric
         void uniformize();
-        void computeCrossFieldCMBranchCover();
+        void computeCrossFieldCMBranchCover(std::complex<double> init = std::complex<double>(1,0));
         
         // stripes
-        void computeStripes();
-        void textureCoordinates();
+        double computeStripes(double scale=100);
+        bool textureCoordinates();
 
         // visualization
         void visualize();
@@ -64,15 +64,15 @@ class QuadMesh {
         // uniformization helpers
         void setupCM();
         double updateAreas();
+        void uniformizeBoundary();
 
         // cross field quantities
         FaceData<std::complex<double>> fieldCM;    // field computed on original surface
         std::vector<FaceData<std::complex<double>>> branchCoverFields; // field computed on branch cover
         BranchCoverTopology BC;
-        double scale = 100;
 
         // stripes helpers
-        void computeOmega();
+        void computeOmega(double scale);
         Eigen::SparseMatrix<double> energyMatrix();
         Eigen::SparseMatrix<double> massMatrix();
 

@@ -939,7 +939,7 @@ void SurfaceMesh::addQuantity(std::string name, HalfedgeData<double>& value, Dat
   addSurfaceQuantity(q);
 }
 
-void SurfaceMesh::addQuantity(std::string name, FaceData<std::vector<Vector2>>& value, DataType type) {
+void SurfaceMesh::addQuantity(std::string name, FaceData<std::pair<int,std::vector<Vector2>>> &value, DataType type) {
   SurfaceScalarQuantity* q = new SurfaceScalarStripesQuantity(name, value, this, type);
   addSurfaceQuantity(q);
 }

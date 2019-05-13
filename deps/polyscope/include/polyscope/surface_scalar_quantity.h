@@ -59,7 +59,7 @@ public:
 
 class SurfaceScalarStripesQuantity : public SurfaceScalarQuantity {
 public:
-  SurfaceScalarStripesQuantity(std::string name, FaceData<std::vector<Vector2>>& values_, SurfaceMesh* mesh_,
+  SurfaceScalarStripesQuantity(std::string name, FaceData<std::pair<int,std::vector<Vector2>>> &values_, SurfaceMesh* mesh_,
                               DataType dataType_ = DataType::STANDARD);
   //   ~SurfaceScalarVertexQuantity();
 
@@ -68,7 +68,7 @@ public:
   void fillColorBuffers(gl::GLProgram* p);
 
   // === Members
-  FaceData<std::vector<Vector2>> values;
+  FaceData<std::pair<int,std::vector<Vector2>>> values;
 };
 
 // ========================================================

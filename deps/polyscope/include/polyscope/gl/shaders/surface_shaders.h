@@ -416,6 +416,7 @@ static const VertShader VERTSTRIPES_SURFACE_VERT_SHADER =  {
         {"a_normal", GLData::Vector3Float},
         {"a_barycoord", GLData::Vector3Float},
         {"a_texcoord", GLData::Vector2Float},
+        //{"a_n", GLData::Float},
     },
 
     // source
@@ -426,6 +427,7 @@ static const VertShader VERTSTRIPES_SURFACE_VERT_SHADER =  {
       in vec3 a_normal;
       in vec3 a_barycoord;
       in vec2 a_texcoord;
+      //in float a_n;
       out vec3 Normal;
       out vec3 Position;
       out vec3 Barycoord;
@@ -486,19 +488,17 @@ static const FragShader VERTSTRIPES_SURFACE_FRAG_SHADER = {
 
       void main()
       {
-        // for drawing quads
-        float checkSize = 1.0 / (2.0 * 3.14159265359);
-        // mod by 2 to get even or odd tile
-        float fmodResult = mod(floor(checkSize * Texcoord.x) + floor(checkSize * Texcoord.y), 2.0);
-        // make sure result is >= 0
-        float fin = max(sign(fmodResult), 0.0);
-        vec3 color = vec3(fin, fin, fin);
+        vec3 color;
 
         // for drawing isolines
         float width = 0.1;
         float two_pi = 2.0 * 3.14159265359;
-        if ( (mod(Texcoord.x, two_pi)) < width || (mod(Texcoord.x, two_pi)) > two_pi - width ||
-            (mod(Texcoord.y, two_pi)) < width || (mod(Texcoord.y, two_pi)) > two_pi - width ) {
+        float pi = 3.14159265359;
+
+        float x = Texcoord.x + pi;
+        float y = Texcoord.y + pi;
+        if ( (mod(x, two_pi)) < width || (mod(x, two_pi)) > two_pi - width ||
+            (mod(y, two_pi)) < width || (mod(y, two_pi)) > two_pi - width ) {
             color = vec3(0, 0, 0);
         } else {
             color = vec3(1.0,1.0,1.0);
