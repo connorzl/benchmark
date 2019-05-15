@@ -359,17 +359,17 @@ int main(int argc, char** argv) {
     M.computeSingularities();
     M.computeBranchCover();
     M.uniformize();
+    
     M.computeCrossFieldCMBranchCover();
+    M.computeStripes(100);
+    M.textureCoordinates();
     M.visualize();
     polyscope::show();
-    /*
-    M.computeStripes();
-    M.textureCoordinates();
-    */
+    
     
     std::complex<double> i(0,1);
     //std::ofstream outfile ("eigenvalues.txt");
-    double scale = 16 * PI;
+    double scale = 100;//16 * PI;
     std::complex<double> init(1,0);
     // 32, 122, 212, 302 for bunny
     for (int t = 0; t < 90; t+=1) {
@@ -382,6 +382,8 @@ int main(int argc, char** argv) {
       M.textureCoordinates();
       M.visualize();
       polyscope::screenshot();
+      polyscope::show();
+      
       //break;
     }
     //outfile.close();
