@@ -359,7 +359,6 @@ int main(int argc, char** argv) {
     M.computeSingularities();
     M.computeBranchCover();
     M.uniformize();
-    
     M.computeCrossFieldCMBranchCover();
     M.computeStripes(100);
     M.textureCoordinates();

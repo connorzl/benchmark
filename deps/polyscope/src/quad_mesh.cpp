@@ -3,7 +3,6 @@
 #include <Eigen/SparseLU>
 #include <queue>
 
-// ONLY WORKS FOR MESHES WITHOUT BOUNDARY
 QuadMesh::QuadMesh(HalfedgeMesh* m, Geometry<Euclidean>* g) : mesh(m), geom(g), theta(m), r(m), field(m), 
                                                                 singularities(m), eta(m),
                                                                 edgeLengthsCM(m), thetaCM(m), rCM(m), cmAngles(m),
@@ -189,7 +188,10 @@ void QuadMesh::computeSingularities() {
     for (VertexPtr v : mesh->vertices()) {
         double angleSum = 0;
 
-        if (v.isBoundary()) continue;
+        if (v.isBoundary()) {
+            singularities[v] = 0;
+            continue;
+        } 
 
         for (HalfedgePtr he : v.outgoingHalfedges()) {
             std::complex<double> u_i = field[he.face()];
@@ -214,7 +216,10 @@ void QuadMesh::computeBranchCover(bool improve) {
     for (VertexPtr v : mesh->vertices()) {
         int total = 0;
         for (HalfedgePtr he : v.outgoingHalfedges()) {
-            if (he.edge().isBoundary()) continue;
+            if (he.edge().isBoundary()) {
+                eta[he] = 0;
+                continue;
+            }
             std::complex<double> u_i = std::pow(field[he.face()], 1.0 / n);
             std::complex<double> u_j = std::pow(field[he.twin().face()], 1.0 / n);
             
@@ -287,7 +292,9 @@ void QuadMesh::computeBranchCover(bool improve) {
                     for (HalfedgePtr Nhe : neighbor.adjacentHalfedges()) {
                         int oldVal = eta[Nhe];
                         eta[Nhe] = (eta[Nhe] + offset) % n;
-                        eta[Nhe.twin()] = (eta[Nhe.twin()] - offset) % n;
+                        if (Nhe.twin().isReal()) {
+                            eta[Nhe.twin()] = (eta[Nhe.twin()] - offset) % n;
+                        }
                         if (eta[Nhe] == -1) eta[Nhe] = 3;
                         if (eta[Nhe.twin()] == -1) eta[Nhe.twin()] = 3;
                         if (eta[Nhe] == -3) eta[Nhe] = 1;
@@ -320,7 +327,6 @@ double QuadMesh::updateAreas() {
     return totalArea;
 }
 
-// rarely it seg faults here for some reason
 void QuadMesh::uniformizeBoundary() {
     std::cout << "Boundary Uniformization..." << std::endl;
     // re-index the interior vertices starting from 0
@@ -342,6 +348,7 @@ void QuadMesh::uniformizeBoundary() {
     
     // Ax = b, where A = |V| x |V| laplacian, x = |V| x 1 vertex scaling, b = |V| x 1 curvature diff K - K*
     Eigen::MatrixXd KTarg(mesh->nInteriorVertices(),1);
+    Eigen::MatrixXd K(mesh->nInteriorVertices(),1);
     for (VertexPtr v : mesh->vertices()) {
         if (v.isBoundary()) continue;
         size_t index = interiorVertexIndices[v];
@@ -363,8 +370,6 @@ void QuadMesh::uniformizeBoundary() {
     
     Eigen::MatrixXd u = Eigen::MatrixXd::Zero(mesh->nInteriorVertices(),1);
     Eigen::MatrixXd u_prev, x;
-    Eigen::SparseMatrix<double> A;
-    Eigen::MatrixXd K = Eigen::MatrixXd::Zero(mesh->nInteriorVertices(),1);
     int iter = 0;
     double resid = 0;
     
@@ -372,17 +377,15 @@ void QuadMesh::uniformizeBoundary() {
         u_prev = u;
         Eigen::SparseMatrix<double> A_all = Operators::intrinsicLaplaceMatrix(mesh,edgeLengthsCM);
         BlockDecompositionResult<double> B = blockDecomposeSquare(A_all, interior);
-        A = B.AA;
 
         Eigen::MatrixXd K_all = Operators::intrinsicCurvature(mesh,edgeLengthsCM);
-        K.resize(mesh->nInteriorVertices(),mesh->nInteriorVertices());
         for (VertexPtr v : mesh->vertices()) {
             if (v.isBoundary()) continue;
             K(interiorVertexIndices[v],0) = K_all(vertexIndices[v],0);
         }
 
         Eigen::MatrixXd rhs = KTarg - K;
-        x = solveSquare<double>(A, rhs);
+        x = solveSquare<double>(B.AA, rhs);
         u = u + x;
 
         // update edge lengths
@@ -777,40 +780,27 @@ Eigen::SparseMatrix<double> QuadMesh::energyMatrix() {
     
     std::vector<BHalfedge> allBHalfedges = BC.allHalfedges();
     for (BHalfedge BHe : allBHalfedges) {
-        if (!BHe.he.isReal()) continue;
-
         // skip over halfedges that contain a singular vertex
         if (singularities[BHe.he.vertex()] != 0 || singularities[BHe.next().he.vertex()] != 0) continue;
 
         // get cotan weights
         double cotA, cotB, w;
-        bool aImag, bImag;
-
+        VertexPtr A,B;
         // first check if boundary halfedges
         if (BHe.he.isReal()) {
             cotA = 1.0 / tan(cmAngles[BHe.he]);
-            aImag = false;
+            A = BHe.he.prev().vertex();
         } else {
-            aImag = true;
             cotA = 0;
         }
         if (BHe.twin().he.isReal()) {
             cotB = 1.0 / tan(cmAngles[BHe.twin().he]);
-            bImag = false;
+            B = BHe.twin().he.prev().vertex();
         } else {
             cotB = 0;
-            bImag = true;
         }
 
-        // get 2 vertices to check for singularities, being careful of boundary
-        VertexPtr A,B;
-        if (BHe.he.isReal()){
-            A = BHe.he.prev().vertex();
-        } 
-        if (BHe.he.twin().isReal()){
-            B = BHe.twin().he.prev().vertex();
-        }
-        
+        // check for singularities
         if (BHe.he.isReal() && singularities[A] != 0 && 
             BHe.he.twin().isReal() && singularities[B] != 0) {
             throw std::logic_error("halfedge between 2 singularities");
@@ -843,8 +833,14 @@ Eigen::SparseMatrix<double> QuadMesh::energyMatrix() {
         };
    
         // get vertex indices and imaginary sign
-        BVertex Bv_A = BHe.vertex();
-        BVertex Bv_B = BHe.next().vertex();
+        BVertex Bv_A, Bv_B;
+        if (BHe.he.isReal()) {
+            Bv_A = BHe.vertex();
+            Bv_B = BHe.next().vertex();
+        } else {
+            Bv_A = BHe.twin().next().vertex();
+            Bv_B = BHe.twin().vertex();
+        }
 
         size_t iA_re, iA_im, iB_re, iB_im;
         double sA_im, sB_im;
