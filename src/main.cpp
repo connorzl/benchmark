@@ -357,25 +357,39 @@ int main(int argc, char** argv) {
     QuadMesh M = QuadMesh(mesh,geom);
     M.computeCrossField();
     M.computeSingularities();
-    M.computeBranchCover();
     M.uniformize();
+    M.computeBranchCover();
     M.computeCrossFieldCMBranchCover();
-    M.computeStripes(100);
-    M.textureCoordinates();
+  
+    //M.computeStripes();
+    //M.optimizeHarmonic();
+    //M.textureCoordinates();
     M.visualize();
     polyscope::show();
-    
-    
-    std::complex<double> i(0,1);
+    //M.optimizeSimpleLocally();
+    //M.optimizeSimpleGlobally();
+    //M.optimizeHarmonic();
+
+    int iter = 0;
+    while (!M.textureCoordinates()) {
+      std::cout << "Optimization: " << iter << std::endl;
+      M.optimizeHarmonic();  
+      iter++;
+    }
+    std::cout << "TOTAL ITERS: " << iter << std::endl;
+    M.visualize();
+    polyscope::show();
+  
+    /*
     //std::ofstream outfile ("eigenvalues.txt");
     double scale = 100;//16 * PI;
     std::complex<double> init(1,0);
     // 32, 122, 212, 302 for bunny
     for (int t = 0; t < 90; t+=1) {
       double rad = t * (PI / 180.0);
-      std::complex<double> rot = std::exp(i * rad);
-      M.computeCrossFieldCMBranchCover(rot * init);
-      double lambda = M.computeStripes(scale);
+      std::complex<double> rot = std::exp(IM_I * rad);
+      M.computeCrossFieldCMBranchCover(rot * init, scale);
+      double lambda = M.computeStripes();
       std::cout << "rotation and lambda: " << t << "," << lambda << std::endl;
       //outfile << lambda << std::endl;
       M.textureCoordinates();
@@ -386,38 +400,41 @@ int main(int argc, char** argv) {
       //break;
     }
     //outfile.close();
-    
     polyscope::show();
-    
-    //HarmonicBases HB = HarmonicBases(mesh,geom);
-    //std::vector<Eigen::MatrixXd> bases = HB.compute();
+    */
     /*
+    HarmonicBases HB = HarmonicBases(mesh,geom);
+    std::vector<Eigen::MatrixXd> bases = HB.compute();
+    
     std::vector<std::vector<HalfedgePtr>> generators = HB.generators;
     for (size_t i = 0; i < generators.size(); i++) {
-      HalfedgeData<double> generatorEdges(mesh);
-      for (HalfedgePtr he : mesh->allHalfedges()) {
-        generatorEdges[he] = 0;
+      FaceData<double> generatorFaces(mesh);
+      for (FacePtr f : mesh->faces()) {
+        generatorFaces[f] = 0;
       }
       for (size_t j = 0; j < generators[i].size(); j++) {
         HalfedgePtr he = generators[i][j];
-        generatorEdges[he] = 10*i+10;
+        generatorFaces[he.face()] = 1;
       }
       std::string name = "Generator " + std::to_string(i);
-      polyscope::getSurfaceMesh()->addQuantity(name,generatorEdges);
+      polyscope::getSurfaceMesh()->addQuantity(name,generatorFaces);
     }
-    Eigen::MatrixXd omega = HB.bases[0];
+
     EdgeData<size_t> edgeIndices = mesh->getEdgeIndices();
     EdgeData<double> data(mesh);
+    EdgeData<double> data2(mesh);
     for (EdgePtr e : mesh->edges()) {
       size_t index = edgeIndices[e];
-      data[e] = omega(index,0);
+      data[e] = HB.bases[0](index,0);
+      data2[e] = HB.bases[1](index,0);
     }
-    polyscope::getSurfaceMesh()->addVectorQuantity("1-form on edges", data);
+    polyscope::getSurfaceMesh()->addVectorQuantity("1-form on edges 0", data);
+    polyscope::getSurfaceMesh()->addVectorQuantity("1-form on edges 1", data2);
 
     FaceData<std::complex<double>> X = HB.visualize();
     polyscope::getSurfaceMesh()->addVectorQuantity("Harmonic Field", X);
+    polyscope::show();
     */
-    
     // == Add Distortion Data to Mesh, if any
     if (geom->paramCoords.size() > 0) {
       Distortion* d = new Distortion(mesh, geom);

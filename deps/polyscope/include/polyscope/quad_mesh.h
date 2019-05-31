@@ -1,6 +1,7 @@
 #pragma once
 
 #include "polyscope/polyscope.h"
+#include "polyscope/hodge_decomposition.h"
 #include "geometrycentral/halfedge_mesh.h"
 #include "geometrycentral/geometry.h"
 #include "geometrycentral/polygon_soup_mesh.h"
@@ -13,16 +14,19 @@ using namespace geometrycentral;
 class QuadMesh {
     public:
         QuadMesh(HalfedgeMesh* m, Geometry<Euclidean>* g);
-        void computeCrossField();
+        void computeCrossField(bool isCM = false);
         void computeSingularities();
         void computeBranchCover(bool improve=true);
         
         // cone metric
         void uniformize();
-        void computeCrossFieldCMBranchCover(std::complex<double> init = std::complex<double>(1,0));
+        void computeCrossFieldCMBranchCover(std::complex<double> init = std::complex<double>(1,0), double scale = 100);
         
         // stripes
-        double computeStripes(double scale=100);
+        double computeStripes();
+        void optimizeSimpleLocally();
+        void optimizeSimpleGlobally();
+        void optimizeHarmonic();
         bool textureCoordinates();
 
         // visualization
@@ -44,9 +48,9 @@ class QuadMesh {
 
         // smoothest field helpers
         void setup();
-        Eigen::SparseMatrix<std::complex<double>> assembleM();
-        Eigen::SparseMatrix<std::complex<double>> assembleA();
-        void computeSmoothestField(Eigen::SparseMatrix<std::complex<double>> M, Eigen::SparseMatrix<std::complex<double>> A);
+        Eigen::SparseMatrix<std::complex<double>> assembleM(bool isCM = false);
+        Eigen::SparseMatrix<std::complex<double>> assembleA(bool isCM = false);
+        void computeSmoothestField(Eigen::SparseMatrix<std::complex<double>> M, Eigen::SparseMatrix<std::complex<double>> A, bool isCM = false);
 
         // branch cover quantities
         VertexData<int> singularities;
@@ -57,6 +61,7 @@ class QuadMesh {
         EdgeData<double> edgeLengthsCM;
         HalfedgeData<std::complex<double>> thetaCM;
         HalfedgeData<std::complex<double>> rCM;
+        FaceData<std::complex<double>> fieldCM;
         HalfedgeData<double> cmAngles;
         FaceData<double> cmAreas;
         VertexData<double> curvatures;
@@ -65,15 +70,17 @@ class QuadMesh {
         void setupCM();
         double updateAreas();
         void uniformizeBoundary();
+        void hyperbolicEdgeFlips();
 
         // cross field quantities
-        FaceData<std::complex<double>> fieldCM;    // field computed on original surface
         std::vector<FaceData<std::complex<double>>> branchCoverFields; // field computed on branch cover
         BranchCoverTopology BC;
+        std::vector<FaceData<std::complex<double>>> xBasis;
 
         // stripes helpers
         void computeOmega(double scale);
         Eigen::SparseMatrix<double> energyMatrix();
+        Eigen::SparseMatrix<double> energyMatrix2();
         Eigen::SparseMatrix<double> massMatrix();
 
         // stripes quantities
