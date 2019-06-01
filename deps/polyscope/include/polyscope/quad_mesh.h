@@ -100,4 +100,5 @@ class QuadMesh {
         FaceData<int> zeros;
 
         EdgeData<double> errors; 
+        EdgeData<double> edgeFlipped;
 };

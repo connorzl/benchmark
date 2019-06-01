@@ -352,7 +352,7 @@ int main(int argc, char** argv) {
     polyscope::init();
     std::string meshNiceName = polyscope::utilities::guessNiceNameFromPath(args::get(inFileName));
     polyscope::registerSurfaceMesh(meshNiceName, geom);
-    polyscope::getSurfaceMesh()->enabled = true;
+    //polyscope::getSurfaceMesh()->enabled = true;
 
     QuadMesh M = QuadMesh(mesh,geom);
     M.computeCrossField();
@@ -360,15 +360,15 @@ int main(int argc, char** argv) {
     M.uniformize();
     M.computeBranchCover();
     M.computeCrossFieldCMBranchCover();
-  
-    //M.computeStripes();
+    M.computeStripes();
+
     //M.optimizeHarmonic();
     //M.textureCoordinates();
-    M.visualize();
-    polyscope::show();
+    //M.visualize();
+    //polyscope::show();
+    
     //M.optimizeSimpleLocally();
     //M.optimizeSimpleGlobally();
-    //M.optimizeHarmonic();
 
     int iter = 0;
     while (!M.textureCoordinates()) {

@@ -23,6 +23,8 @@ QuadMesh::QuadMesh(HalfedgeMesh* m, Geometry<Euclidean>* g) : mesh(m), geom(g), 
         psi.push_back(sheetPsi);
         sigma.push_back(sheetSigma);
     }
+
+    edgeFlipped = EdgeData<double>(mesh,0);
 }
 
 void QuadMesh::setup() {
@@ -104,7 +106,7 @@ void QuadMesh::setupCM() {
             if (he.edge().isBoundary()) continue;
             std::complex<double> theta_ij = thetaCM[he];
             std::complex<double> theta_ji = thetaCM[he.twin()];
-            rCM[he] = std::pow(-theta_ij / theta_ji, n);
+            rCM[he] = std::pow((-theta_ij / theta_ji), n);
             rCM[he] /= std::abs(rCM[he]);
         }
     }
@@ -195,29 +197,6 @@ void QuadMesh::computeSmoothestField(Eigen::SparseMatrix<std::complex<double>> M
     FaceData<size_t> faceIndices = mesh->getFaceIndices();
     for (FacePtr f : mesh->faces()) {
         std::complex<double> c = u(faceIndices[f],0);
-        /*
-        // for testing the torus
-        VertexPtr v_i = f.halfedge().vertex();
-        VertexPtr v_j = f.halfedge().next().vertex();
-        VertexPtr v_k = f.halfedge().prev().vertex();
-        
-        Vector3 p_i = geom->position(v_i);
-        Vector3 p_j = geom->position(v_j);
-        Vector3 p_k = geom->position(v_k);
-
-        Vector3 centroid = (p_i + p_j + p_k) / 3.0;
-        centroid = Vector3{-centroid.z, 0, centroid.x};
-
-        Vector3 x = p_j - p_i;
-        Vector3 normal = geom->normal(f);
-        Vector3 y = cross(normal, x);
-
-        double X1 = dot(x, centroid);
-        double X2 = dot(y, centroid);
-        std::complex<double> c(X1,X2);
-
-        c = std::pow(c,4);
-        */
         std::complex<double> val;
         if (std::abs(c) == 0) {
             val = 0;
@@ -233,7 +212,7 @@ void QuadMesh::computeSmoothestField(Eigen::SparseMatrix<std::complex<double>> M
 } 
 
 void QuadMesh::computeCrossField(bool isCM) {
-    std::cout << "Computing Smoothest Cross Field CM..." << std::endl;
+    std::cout << "Computing Smoothest Cross Field" << std::endl;
     if (isCM) {
         setupCM();
     } else {
@@ -252,7 +231,7 @@ void QuadMesh::computeCrossField(bool isCM) {
 void QuadMesh::computeSingularities() {
     std::cout << "Computing Singularities...";
 
-    // finally, compute index for each vertex v
+    // compute index for each vertex v
     int total = 0;
     for (VertexPtr v : mesh->vertices()) {
         double angleSum = 0;
@@ -296,6 +275,7 @@ double QuadMesh::updateAreas() {
 }
 
 void QuadMesh::hyperbolicEdgeFlips() {
+    double maxDiff = 0;
     for (EdgePtr e : mesh->edges()) {
         HalfedgePtr he_ij = e.halfedge();
         HalfedgePtr he_ji = he_ij.twin();
@@ -317,14 +297,18 @@ void QuadMesh::hyperbolicEdgeFlips() {
         double gamma_ji = l_gamma_ji / (l_alpha_ji * l_beta_ji);
 
         double sum = beta_ij + beta_ji + gamma_ij + gamma_ji - alpha_ij - alpha_ji;
-        if (sum < 0) {
-            e.flip();
-            edgeLengthsCM[e] = (l_gamma_ij * l_beta_ji + l_gamma_ji * l_beta_ij) / l_alpha_ij;
-            //std::cout << edgeLengthsCM[e] << std::endl;
+        if (sum < -1e-8) {
+            e.flip(); // this doesn't seem to do shit visually
+            edgeFlipped[e] = 100.0;
+            double newL = (l_gamma_ij * l_beta_ji + l_gamma_ji * l_beta_ij) / l_alpha_ij;
+            maxDiff = std::max(maxDiff, std::abs(edgeLengthsCM[e] - newL));
+            edgeLengthsCM[e] = newL;
         }
     }
+    //std::cout << "max diff: " << maxDiff << std::endl;
 }
 
+// this needs to include hyperbolic edge flips
 void QuadMesh::uniformizeBoundary() {
     std::cout << "Boundary Uniformization..." << std::endl;
     // re-index the interior vertices starting from 0
@@ -471,15 +455,35 @@ void QuadMesh::uniformize() {
     hyperbolicEdgeFlips();
 
     Eigen::SparseMatrix<double> A;
-    Eigen::MatrixXd K,x;
+    Eigen::MatrixXd x = Eigen::MatrixXd::Zero(mesh->nVertices(),1);
+    Eigen::MatrixXd K, x_prev;
     double resid = 0;
     do {
+        x_prev = x;
         A = Operators::intrinsicLaplaceMatrix(mesh,edgeLengthsCM);
         K = Operators::intrinsicCurvature(mesh,edgeLengthsCM);
 
         Eigen::MatrixXd rhs = KTarg - K;
         x = solveSquare<double>(A, rhs);
         x = x.array() - x.mean();
+        /*
+        double totalArea = updateAreas();
+        VertexData<double> BDA(mesh,0);
+        for (VertexPtr v : mesh->vertices()) {
+            double area = 0;
+            for (FacePtr f : v.adjacentFaces()) {
+                area += cmAreas[f] / 3.0;
+            }
+            BDA[v] = area;
+        }
+        double x_avg = 0;
+        for (VertexPtr v : mesh->vertices()) {
+            size_t index = vertexIndices[v];
+            x_avg += x(index,0) * BDA[v];
+        }
+        x_avg /= totalArea;
+        x = x.array() - x_avg;
+        */
 
         // update edge lengths
         for (EdgePtr e : mesh->edges()) {
@@ -492,8 +496,10 @@ void QuadMesh::uniformize() {
             edgeLengthsCM[e] *= s;
         }
 
+        //resid = (x - x_prev).array().abs().maxCoeff();
+        K = Operators::intrinsicCurvature(mesh,edgeLengthsCM);
         resid = (KTarg - K).array().abs().maxCoeff();
-        std::cout << "Norm of change: " << resid << std::endl;  
+        std::cout << "Resid: " << resid << std::endl;  
 
         // perform hyperbolic edge flips to make sure things are okay
         hyperbolicEdgeFlips();
@@ -1521,8 +1527,8 @@ void QuadMesh::optimizeHarmonic() {
     Eigen::MatrixXd newOmega(4 * mesh->nEdges(),1);
     for (BEdge Be : allBEdges) {
         size_t i = edgeIndices[Be.sheet][Be.e];
-        newOmega(i,0) = omega[Be.sheet][Be.e];
-        continue;
+        //newOmega(i,0) = omega[Be.sheet][Be.e];
+        //continue;
         
         BVertex Bv_i = Be.halfedge().vertex();
         BVertex Bv_j = Be.halfedge().next().vertex();
@@ -1719,6 +1725,7 @@ void QuadMesh::visualize() {
 
     // updated cross field on cone metric
     polyscope::getSurfaceMesh()->addVectorQuantity("Smoothest Cross Field CM", fieldCM, 4);
+    polyscope::getSurfaceMesh()->addQuantity("Edge flipped", edgeFlipped);
 
     // cross frame on branch cover
     for (int i = 0; i < 4; i++) {
@@ -1733,7 +1740,6 @@ void QuadMesh::visualize() {
     polyscope::getSurfaceMesh()->addVectorQuantity("omega 2", omega[2]);
     polyscope::getSurfaceMesh()->addVectorQuantity("omega 3", omega[3]);
     
-/*
     // direct stripe coords
     polyscope::getSurfaceMesh()->addQuantity("X Coords", coords[0]);
     polyscope::getSurfaceMesh()->addQuantity("Y Coords", coords[1]);
@@ -1769,5 +1775,5 @@ void QuadMesh::visualize() {
     }
     polyscope::getSurfaceMesh()->addQuantity("Psi real", psi_real);
     polyscope::getSurfaceMesh()->addQuantity("Psi imag", psi_imag);
-*/
+
 }

@@ -2,10 +2,10 @@
 
 HodgeDecomposition::HodgeDecomposition(std::vector<VertexData<size_t>> &v, 
     std::vector<EdgeData<size_t>> &e, std::vector<FaceData<size_t>> &f, 
-    BranchCoverTopology &BC_, HalfedgeData<double> &cmCotans_, 
+    BranchCoverTopology &BC_, HalfedgeData<double> &cmAngles_, 
     FaceData<double> &cmAreas_, HalfedgeMesh* mesh_, int numSingularities_) : 
         vertexIndices(v), edgeIndices(e), faceIndices(f), 
-        BC(BC_), cmCotans(cmCotans_), cmAreas(cmAreas_),
+        BC(BC_), cmAngles(cmAngles_), cmAreas(cmAreas_),
         mesh(mesh_), numSingularities(numSingularities_) {
 
             hodge1 = buildHodgeStar1Form();
@@ -55,8 +55,8 @@ Eigen::SparseMatrix<double> HodgeDecomposition::buildHodgeStar1Form() {
 
         size_t i = edgeIndices[Be.sheet][Be.e];
         BHalfedge BHe = Be.halfedge();
-        double cotA = (BHe.he.isReal()) ? cmCotans[BHe.he] : 0;
-        double cotB = (BHe.he.twin().isReal()) ? cmCotans[BHe.he.twin()] : 0; 
+        double cotA = (BHe.he.isReal()) ? 1.0 / tan(cmAngles[BHe.he]) : 0;
+        double cotB = (BHe.he.twin().isReal()) ? 1.0 / tan(cmAngles[BHe.he.twin()]) : 0; 
         double w = (cotA + cotB) / 2.0;
         if (w < 1e-8) w = 1e-8;
         //std::cout << w << std::endl;
@@ -166,9 +166,9 @@ Eigen::SparseMatrix<double> HodgeDecomposition::buildLaplacian() {
         double cot_ij, cot_jk, cot_ki;
 
         // compute cotan
-        cot_ij = cmCotans[BHe_ij.he];
-        cot_jk = cmCotans[BHe_jk.he];
-        cot_ki = cmCotans[BHe_ki.he];
+        cot_ij = 1.0 / tan(cmAngles[BHe_ij.he]);
+        cot_jk = 1.0 / tan(cmAngles[BHe_jk.he]);
+        cot_ki = 1.0 / tan(cmAngles[BHe_ki.he]);
 
         size_t i = vertexIndices[Bv_i.sheet][Bv_i.v];
         size_t j = vertexIndices[Bv_j.sheet][Bv_j.v];
@@ -192,7 +192,6 @@ Eigen::SparseMatrix<double> HodgeDecomposition::buildLaplacian() {
     }
     A.setFromTriplets(tripletsCot.begin(),tripletsCot.end());
     */
-
     Eigen::SparseMatrix<double> offset(A.rows(),A.cols());
     offset.setIdentity();
     offset = offset * 1e-8;

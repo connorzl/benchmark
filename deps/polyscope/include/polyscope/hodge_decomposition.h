@@ -25,7 +25,7 @@ class HodgeDecomposition {
         std::vector<EdgeData<size_t>> edgeIndices;
         std::vector<FaceData<size_t>> faceIndices; 
         BranchCoverTopology BC;
-        HalfedgeData<double> cmCotans; 
+        HalfedgeData<double> cmAngles;
         FaceData<double> cmAreas;
         HalfedgeMesh* mesh;
         int numSingularities;
@@ -35,7 +35,7 @@ class HodgeDecomposition {
         Eigen::SparseMatrix<double> buildExteriorDerivative1Form();
         Eigen::SparseMatrix<double> buildLaplacian();
         Eigen::SparseMatrix<double> invertDiagonal(Eigen::SparseMatrix<double> M);
-        
+
         Eigen::SparseMatrix<double> buildExteriorDerivative0FormInterior(size_t numInterior);
 
         Eigen::SparseMatrix<double> hodge1;
