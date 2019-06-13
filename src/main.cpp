@@ -18,9 +18,9 @@
 #include "geometrycentral/arap.h"
 #include "geometrycentral/quad_cover.h"
 #include "geometrycentral/stripes.h"
-#include "geometrycentral/harmonicbases.h"
 #include "geometrycentral/BHalfedgemesh.h"
 #include "polyscope/quad_mesh.h"
+#include "polyscope/harmonicbases.h"
 
 #include "imgui.h"
 #include "args/args.hxx"
@@ -351,29 +351,36 @@ int main(int argc, char** argv) {
     //VertexData<double> offsets = Q.computeOffset(); this is for quad_cover double cover
     polyscope::init();
     std::string meshNiceName = polyscope::utilities::guessNiceNameFromPath(args::get(inFileName));
-    polyscope::registerSurfaceMesh(meshNiceName, geom);
-    //polyscope::getSurfaceMesh()->enabled = true;
-
+    polyscope::registerSurfaceMesh("pre-uniformization", geom);
+    polyscope::getSurfaceMesh("pre-uniformization")->enabled = false;
+    
     QuadMesh M = QuadMesh(mesh,geom);
     M.computeCrossField();
     M.computeSingularities();
     M.uniformize();
+    //M.visualize();
+    //polyscope::show();
+
     M.computeBranchCover();
     M.computeCrossFieldCMBranchCover();
+    //M.visualize();
+    //polyscope::show();
     M.computeStripes();
 
     //M.optimizeHarmonic();
-    //M.textureCoordinates();
-    //M.visualize();
-    //polyscope::show();
-    
-    //M.optimizeSimpleLocally();
-    //M.optimizeSimpleGlobally();
+    M.textureCoordinates();
+    M.visualize();
+    polyscope::show();
 
     int iter = 0;
     while (!M.textureCoordinates()) {
       std::cout << "Optimization: " << iter << std::endl;
-      M.optimizeHarmonic();  
+      if (iter == 6) {
+        M.optimizeHarmonic(false);
+        //M.optimizeHarmonic(true);
+      } else {
+        M.optimizeHarmonic(false);  
+      }
       iter++;
     }
     std::cout << "TOTAL ITERS: " << iter << std::endl;
@@ -408,18 +415,20 @@ int main(int argc, char** argv) {
     
     std::vector<std::vector<HalfedgePtr>> generators = HB.generators;
     for (size_t i = 0; i < generators.size(); i++) {
-      FaceData<double> generatorFaces(mesh);
-      for (FacePtr f : mesh->faces()) {
-        generatorFaces[f] = 0;
+      HalfedgeData<double> generatorFaces(mesh);
+      for (HalfedgePtr he : mesh->allHalfedges()) {
+        generatorFaces[he] = 0;
       }
       for (size_t j = 0; j < generators[i].size(); j++) {
         HalfedgePtr he = generators[i][j];
-        generatorFaces[he.face()] = 1;
+        generatorFaces[he] = 1;
       }
       std::string name = "Generator " + std::to_string(i);
       polyscope::getSurfaceMesh()->addQuantity(name,generatorFaces);
     }
-
+    polyscope::show();
+    */
+/*
     EdgeData<size_t> edgeIndices = mesh->getEdgeIndices();
     EdgeData<double> data(mesh);
     EdgeData<double> data2(mesh);

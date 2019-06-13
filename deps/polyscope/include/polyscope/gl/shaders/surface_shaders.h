@@ -416,7 +416,7 @@ static const VertShader VERTSTRIPES_SURFACE_VERT_SHADER =  {
         {"a_normal", GLData::Vector3Float},
         {"a_barycoord", GLData::Vector3Float},
         {"a_texcoord", GLData::Vector2Float},
-        //{"a_n", GLData::Float},
+        {"a_n", GLData::Float},
     },
 
     // source
@@ -427,11 +427,12 @@ static const VertShader VERTSTRIPES_SURFACE_VERT_SHADER =  {
       in vec3 a_normal;
       in vec3 a_barycoord;
       in vec2 a_texcoord;
-      //in float a_n;
+      in float a_n;
       out vec3 Normal;
       out vec3 Position;
       out vec3 Barycoord;
       out vec2 Texcoord;
+      out float N;
 
       void main()
       {
@@ -439,6 +440,7 @@ static const VertShader VERTSTRIPES_SURFACE_VERT_SHADER =  {
           Normal = a_normal;
           Barycoord = a_barycoord;
           Texcoord = a_texcoord;
+          N = a_n;
           gl_Position = u_projMatrix * u_viewMatrix * vec4(Position,1.);
       }
     )
@@ -481,10 +483,21 @@ static const FragShader VERTSTRIPES_SURFACE_FRAG_SHADER = {
       in vec3 Position;
       in vec3 Barycoord;
       in vec2 Texcoord;
+      in float N;
       out vec4 outputF;
 
       // Forward declarations of methods from <shaders/common.h>
       vec4 lightSurface( vec3 position, vec3 normal, vec3 color, vec3 lightC, float lightD, vec3 eye );
+      float getEdgeFactor(vec3 UVW, float width);
+
+      vec3 edgeColor(vec3 surfaceColor) {
+
+          vec3 edgeColor = vec3(0.0, 0.0, 0.0);
+
+          float eFactor = getEdgeFactor(Barycoord, u_edgeWidth);
+
+          return eFactor * edgeColor + (1.0 - eFactor) * surfaceColor;
+      }
 
       void main()
       {
@@ -498,10 +511,10 @@ static const FragShader VERTSTRIPES_SURFACE_FRAG_SHADER = {
         float x = Texcoord.x + pi;
         float y = Texcoord.y + pi;
         if ( (mod(x, two_pi)) < width || (mod(x, two_pi)) > two_pi - width ||
-            (mod(y, two_pi)) < width || (mod(y, two_pi)) > two_pi - width ) {
-            color = vec3(0, 0, 0);
+             (mod(y, two_pi)) < width || (mod(y, two_pi)) > two_pi - width ) {
+            color = edgeColor(vec3(0, 0, 0));
         } else {
-            color = vec3(1.0,1.0,1.0);
+            color = edgeColor(vec3(1.0,1.0,1.0));
         }
 
         // pass color into output

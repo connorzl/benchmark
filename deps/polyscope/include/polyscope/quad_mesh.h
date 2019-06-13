@@ -26,7 +26,7 @@ class QuadMesh {
         double computeStripes();
         void optimizeSimpleLocally();
         void optimizeSimpleGlobally();
-        void optimizeHarmonic();
+        void optimizeHarmonic(bool visualize = false);
         bool textureCoordinates();
 
         // visualization
@@ -70,7 +70,6 @@ class QuadMesh {
         void setupCM();
         double updateAreas();
         void uniformizeBoundary();
-        void hyperbolicEdgeFlips();
 
         // cross field quantities
         std::vector<FaceData<std::complex<double>>> branchCoverFields; // field computed on branch cover
@@ -100,5 +99,4 @@ class QuadMesh {
         FaceData<int> zeros;
 
         EdgeData<double> errors; 
-        EdgeData<double> edgeFlipped;
 };

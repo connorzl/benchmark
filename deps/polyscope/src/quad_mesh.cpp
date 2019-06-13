@@ -23,8 +23,6 @@ QuadMesh::QuadMesh(HalfedgeMesh* m, Geometry<Euclidean>* g) : mesh(m), geom(g), 
         psi.push_back(sheetPsi);
         sigma.push_back(sheetSigma);
     }
-
-    edgeFlipped = EdgeData<double>(mesh,0);
 }
 
 void QuadMesh::setup() {
@@ -224,7 +222,6 @@ void QuadMesh::computeCrossField(bool isCM) {
     Eigen::SparseMatrix<std::complex<double>> A = assembleA(isCM);
     A = A + eps * M;
     computeSmoothestField(M,A,isCM);
-
     std::cout << "Done!" << std::endl;
 }
 
@@ -253,8 +250,6 @@ void QuadMesh::computeSingularities() {
         if (singularities[v] != 0) {
             numSingularities++;
         }
-        if (singularities[v] == 3) singularities[v] = -1;
-        if (singularities[v] == -2) singularities[v] = 2;
         total += singularities[v];
     }
     std::cout << "Done! Singularities Index Sum: " << total << std::endl;
@@ -272,40 +267,6 @@ double QuadMesh::updateAreas() {
         totalArea += cmAreas[f];
     }
     return totalArea;
-}
-
-void QuadMesh::hyperbolicEdgeFlips() {
-    double maxDiff = 0;
-    for (EdgePtr e : mesh->edges()) {
-        HalfedgePtr he_ij = e.halfedge();
-        HalfedgePtr he_ji = he_ij.twin();
-
-        double l_alpha_ij = edgeLengthsCM[he_ij.edge()];
-        double l_beta_ij = edgeLengthsCM[he_ij.next().edge()];
-        double l_gamma_ij = edgeLengthsCM[he_ij.prev().edge()];
-
-        double l_alpha_ji = edgeLengthsCM[he_ji.edge()];
-        double l_beta_ji = edgeLengthsCM[he_ji.prev().edge()];
-        double l_gamma_ji = edgeLengthsCM[he_ji.next().edge()];
-
-        double alpha_ij = l_alpha_ij / (l_beta_ij * l_gamma_ij);
-        double beta_ij = l_beta_ij / (l_alpha_ij * l_gamma_ij);
-        double gamma_ij = l_gamma_ij / (l_alpha_ij * l_beta_ij);
-
-        double alpha_ji = l_alpha_ji / (l_beta_ji * l_gamma_ji);
-        double beta_ji = l_beta_ji / (l_alpha_ji * l_gamma_ji);
-        double gamma_ji = l_gamma_ji / (l_alpha_ji * l_beta_ji);
-
-        double sum = beta_ij + beta_ji + gamma_ij + gamma_ji - alpha_ij - alpha_ji;
-        if (sum < -1e-8) {
-            e.flip(); // this doesn't seem to do shit visually
-            edgeFlipped[e] = 100.0;
-            double newL = (l_gamma_ij * l_beta_ji + l_gamma_ji * l_beta_ij) / l_alpha_ij;
-            maxDiff = std::max(maxDiff, std::abs(edgeLengthsCM[e] - newL));
-            edgeLengthsCM[e] = newL;
-        }
-    }
-    //std::cout << "max diff: " << maxDiff << std::endl;
 }
 
 // this needs to include hyperbolic edge flips
@@ -340,25 +301,19 @@ void QuadMesh::uniformizeBoundary() {
             KTarg(index,0) = M_PI_2;
         } else if (singularities[v] == -1) {
             KTarg(index,0) = -M_PI_2;
+        } else if (singularities[v] == -2) {
+            KTarg(index,0) = -M_PI;
         } else {
-            if (singularities[v] != 2) {
-                throw std::logic_error("non +1/-1 singular index");
-            }
-            KTarg(index,0) = M_PI;
+            throw std::logic_error("non +1/-1/-2 singularity");
         }
     }
 
-    EdgeData<double> l0(mesh);
-    geom->getEdgeLengths(l0);
+    // make mesh delaunay
     geom->getEdgeLengths(edgeLengthsCM);
+    Operators::hyperbolicEdgeFlips(mesh, edgeLengthsCM);
     
-    Eigen::MatrixXd u = Eigen::MatrixXd::Zero(mesh->nInteriorVertices(),1);
-    Eigen::MatrixXd u_prev, x;
-    int iter = 0;
     double resid = 0;
-    
     do {
-        u_prev = u;
         Eigen::SparseMatrix<double> A_all = Operators::intrinsicLaplaceMatrix(mesh,edgeLengthsCM);
         BlockDecompositionResult<double> B = blockDecomposeSquare(A_all, interior);
 
@@ -369,8 +324,7 @@ void QuadMesh::uniformizeBoundary() {
         }
 
         Eigen::MatrixXd rhs = KTarg - K;
-        x = solveSquare<double>(B.AA, rhs);
-        u = u + x;
+        Eigen::MatrixXd x = solveSquare<double>(B.AA, rhs);
 
         // update edge lengths
         for (EdgePtr e : mesh->edges()) {
@@ -381,20 +335,19 @@ void QuadMesh::uniformizeBoundary() {
             if (vi.isBoundary()) {
                 ui = 0;
             } else {
-                ui = u(interiorVertexIndices[vi],0);
+                ui = x(interiorVertexIndices[vi],0);
             }
             if (vj.isBoundary()) {
                 uj = 0;
             } else {
-                uj = u(interiorVertexIndices[vj],0);
+                uj = x(interiorVertexIndices[vj],0);
             }
             double s = std::exp( (ui + uj) / 2 );
-            edgeLengthsCM[e] = l0[e] * s;
+            edgeLengthsCM[e] *= s;
         }
         
-        resid = (u - u_prev).array().abs().maxCoeff();
-        std::cout << "Norm of change: " << resid << std::endl;    
-        
+        Operators::hyperbolicEdgeFlips(mesh, edgeLengthsCM);
+
         // check to see if triangle inequality still holds
         for (FacePtr f : mesh->faces()) {
             HalfedgePtr he = f.halfedge();
@@ -406,7 +359,13 @@ void QuadMesh::uniformizeBoundary() {
             }
         }
 
-        iter++;
+        K_all = Operators::intrinsicCurvature(mesh,edgeLengthsCM);
+        for (VertexPtr v : mesh->vertices()) {
+            if (v.isBoundary()) continue;
+            K(interiorVertexIndices[v],0) = K_all(vertexIndices[v],0);
+        }
+        resid = (KTarg - K).array().abs().maxCoeff();
+        std::cout << "Resid: " << resid << std::endl;  
     } while (resid > 1e-12);
 
     K = Operators::intrinsicCurvature(mesh, edgeLengthsCM);
@@ -423,16 +382,18 @@ void QuadMesh::uniformizeBoundary() {
 
 void QuadMesh::uniformize() {
     if (mesh->nBoundaryLoops() > 0) {
+        //throw std::logic_error ("not implemented for boundary meshes yet");
         uniformizeBoundary();
         return;
     }
-
+    if (mesh->eulerCharacteristic() != 2) {
+        throw std::logic_error("non genus-0 shape");
+    }
     std::cout << "Boundary-less Uniformization..." << std::endl;
-    size_t n = mesh->nVertices();
     VertexData<size_t> vertexIndices = mesh->getVertexIndices();
-    
+
     // Ax = b, where A = |V| x |V| laplacian, x = |V| x 1 vertex scaling, b = |V| x 1 curvature diff K - K*
-    Eigen::MatrixXd KTarg(n,1);
+    Eigen::MatrixXd KTarg(mesh->nVertices(),1);
     for (VertexPtr v : mesh->vertices()) {
         size_t index = vertexIndices[v];
         if (singularities[v] == 0) {
@@ -441,49 +402,37 @@ void QuadMesh::uniformize() {
             KTarg(index,0) = M_PI_2;
         } else if (singularities[v] == -1) {
             KTarg(index,0) = -M_PI_2;
+        } else if (singularities[v] == -2) {
+            KTarg(index,0) = -M_PI;
         } else {
-            if (singularities[v] != 2) {
-                std::cout << singularities[v] << std::endl;
-                throw std::logic_error("non +1/-1/+2 singular index");
+            polyscope::warning("WEIRD SINGULARITY INDEX");
+            std::cout << "warning: singularity index " << singularities[v] << std::endl;
+            if (singularities[v] == 2) {
+                KTarg(index,0) = M_PI;
+                continue;
             }
-            KTarg(index,0) = M_PI;
+            std::cout << singularities[v] << std::endl;
+            throw std::logic_error("non +1/-1/-2 singular index");
         }
+    }
+    if (std::abs(KTarg.sum() - mesh->eulerCharacteristic() * 2.0 * M_PI) > 1e-8) {
+        throw std::logic_error("Target curvatures do not satisfy Gauss Bonnet");
     }
 
     // make mesh delaunay
     geom->getEdgeLengths(edgeLengthsCM);    
-    hyperbolicEdgeFlips();
+    Operators::hyperbolicEdgeFlips(mesh, edgeLengthsCM);
 
     Eigen::SparseMatrix<double> A;
-    Eigen::MatrixXd x = Eigen::MatrixXd::Zero(mesh->nVertices(),1);
-    Eigen::MatrixXd K, x_prev;
+    Eigen::MatrixXd x, K;
     double resid = 0;
     do {
-        x_prev = x;
         A = Operators::intrinsicLaplaceMatrix(mesh,edgeLengthsCM);
         K = Operators::intrinsicCurvature(mesh,edgeLengthsCM);
 
         Eigen::MatrixXd rhs = KTarg - K;
         x = solveSquare<double>(A, rhs);
         x = x.array() - x.mean();
-        /*
-        double totalArea = updateAreas();
-        VertexData<double> BDA(mesh,0);
-        for (VertexPtr v : mesh->vertices()) {
-            double area = 0;
-            for (FacePtr f : v.adjacentFaces()) {
-                area += cmAreas[f] / 3.0;
-            }
-            BDA[v] = area;
-        }
-        double x_avg = 0;
-        for (VertexPtr v : mesh->vertices()) {
-            size_t index = vertexIndices[v];
-            x_avg += x(index,0) * BDA[v];
-        }
-        x_avg /= totalArea;
-        x = x.array() - x_avg;
-        */
 
         // update edge lengths
         for (EdgePtr e : mesh->edges()) {
@@ -496,13 +445,8 @@ void QuadMesh::uniformize() {
             edgeLengthsCM[e] *= s;
         }
 
-        //resid = (x - x_prev).array().abs().maxCoeff();
-        K = Operators::intrinsicCurvature(mesh,edgeLengthsCM);
-        resid = (KTarg - K).array().abs().maxCoeff();
-        std::cout << "Resid: " << resid << std::endl;  
-
         // perform hyperbolic edge flips to make sure things are okay
-        hyperbolicEdgeFlips();
+        Operators::hyperbolicEdgeFlips(mesh, edgeLengthsCM);
 
         // check to see if triangle inequality still holds
         for (FacePtr f : mesh->faces()) {
@@ -514,10 +458,13 @@ void QuadMesh::uniformize() {
                 throw std::logic_error("Triangle Inequality Violated during Uniformization!");
             }
         }
+
+        K = Operators::intrinsicCurvature(mesh,edgeLengthsCM);
+        resid = (KTarg - K).array().abs().maxCoeff();
+        std::cout << "Resid: " << resid << std::endl;  
     } while (resid > 1e-12);
 
     // store curvatures for visualization
-    K = Operators::intrinsicCurvature(mesh,edgeLengthsCM);
     for (VertexPtr v : mesh->vertices()) {
         curvatures[v] = K(vertexIndices[v],0);        
     }
@@ -644,9 +591,9 @@ void QuadMesh::computeBranchCover(bool improve) {
         do {
             std::complex<double> theta_ij = thetaCM[BHe.he];
             std::complex<double> theta_ji = thetaCM[BHe.he.twin()];
-            std::complex<double> r_ji = -theta_ij / theta_ji;
-            r_ji = r_ji / std::abs(r_ji);
-            vCurr = r_ji * vCurr;
+            std::complex<double> r_ij = -theta_ji / theta_ij;
+            r_ij = r_ij / std::abs(r_ij);
+            vCurr = r_ij * vCurr;
             BHe = BHe.twin().next();
         } while (BHe.he != firstHe.he);
 
@@ -656,9 +603,9 @@ void QuadMesh::computeBranchCover(bool improve) {
         std::complex<double> rotNeg90 = std::exp(i * -M_PI_2);
         if (singularities[Bv.v] == 0 && std::norm(vCurr - v0) > 1e-8) {
             throw std::logic_error("wrong rotation around non-singular vertex");
-        } else if (singularities[Bv.v] == 1 && std::norm(rotNeg90 * vCurr - v0) > 1e-8) {
+        } else if (singularities[Bv.v] == 1 && std::norm(rotPos90 * vCurr - v0) > 1e-8) {
             throw std::logic_error("wrong rotation around +1 singular vertex");
-        } else if (singularities[Bv.v] == -1 && std::norm(rotPos90 * vCurr - v0) > 1e-8) {
+        } else if (singularities[Bv.v] == -1 && std::norm(rotNeg90 * vCurr - v0) > 1e-8) {
             throw std::logic_error("wrong rotation around -1 singular vertex");
         }
     }
@@ -817,13 +764,11 @@ void QuadMesh::computeOmega(double scale) {
     }
 }
 
-Eigen::SparseMatrix<double> QuadMesh::energyMatrix2() {
+Eigen::SparseMatrix<double> QuadMesh::energyMatrix() {
     size_t iNonSingular = 0;
     std::vector<BVertex> allBVertices = BC.allVertices();
     for (BVertex Bv : allBVertices) {
         if (singularities[Bv.v] != 0) {
-            //assert(Bv.sheet == BC.singularSheet);
-            //BVertexIndices[BC.singularSheet][Bv.v] = iSingular++;
             continue;
         } else if (Bv.sheet == 0 || Bv.sheet == 1) {
             BVertexIndices[Bv.sheet][Bv.v] = iNonSingular++;
@@ -988,10 +933,6 @@ Eigen::SparseMatrix<double> QuadMesh::energyMatrix2() {
         BHalfedge BHe_jk = BHe_ij.next();
         BHalfedge BHe_ki = BHe_jk.next();
 
-        BEdge Be_ij = BHe_ij.edge();
-        BEdge Be_jk = BHe_jk.edge();
-        BEdge Be_ki = BHe_ki.edge();
-
         BVertex Bv_i = BHe_ij.vertex();
         BVertex Bv_j = BHe_jk.vertex();
         BVertex Bv_k = BHe_ki.vertex();
@@ -1003,31 +944,17 @@ Eigen::SparseMatrix<double> QuadMesh::energyMatrix2() {
 
         // compute drift weight
         std::complex<double> z = scale * branchCoverFields[Bf.sheet][Bf.f];
-        std::complex<double> e_i = thetaCM[BHe_jk.he];
-        std::complex<double> e_i_perp(-e_i.imag(),e_i.real());
-        std::complex<double> e_j = thetaCM[BHe_ki.he];
-        std::complex<double> e_j_perp(-e_j.imag(),e_j.real());
-        std::complex<double> e_k = thetaCM[BHe_ij.he];
-        std::complex<double> e_k_perp(-e_k.imag(),e_k.real());
-        /*
-        double sign_ij = (Be_ij.halfedge() == BHe_ij) ? 1 : -1;
-        double sign_jk = (Be_jk.halfedge() == BHe_jk) ? 1 : -1;
-        double sign_ki = (Be_ki.halfedge() == BHe_ki) ? 1 : -1;
-        double omega_ij = sign_ij * omega[Be_ij.sheet][Be_ij.e];
-        double omega_jk = sign_jk * omega[Be_jk.sheet][Be_jk.e];
-        double omega_ki = sign_ki * omega[Be_ki.sheet][Be_ki.e];
-
-        std::complex<double> z_ij(cos(omega_ij),sin(omega_ij));
-        std::complex<double> z_jk(cos(omega_jk),sin(omega_jk));
-        std::complex<double> z_ki(cos(omega_ki),sin(omega_ki));
-        */
+        std::complex<double> e_i_perp = IM_I * thetaCM[BHe_jk.he];
+        std::complex<double> e_j_perp = IM_I * thetaCM[BHe_ki.he];
+        std::complex<double> e_k_perp = IM_I * thetaCM[BHe_ij.he];
+       
         double drift_ij = -(1.0 / 6.0) * dot(e_i_perp - e_j_perp, z); 
         double drift_jk = -(1.0 / 6.0) * dot(e_j_perp - e_k_perp, z); 
         double drift_ki = -(1.0 / 6.0) * dot(e_k_perp - e_i_perp, z); 
 
-        double drift_ji = -drift_ij;//(1.0 / 6.0) * -dot(e_j_perp - e_i_perp, -z_ij); 
-        double drift_kj = -drift_jk;//(1.0 / 6.0) * -dot(e_k_perp - e_j_perp, -z_jk); 
-        double drift_ik = -drift_ki;//(1.0 / 6.0) * -dot(e_i_perp - e_k_perp, -z_ki); 
+        double drift_ji = -drift_ij;
+        double drift_kj = -drift_jk;
+        double drift_ik = -drift_ki;
 
         // get index and sign information
         size_t i_re, i_im, j_re, j_im, k_re, k_im;
@@ -1037,36 +964,39 @@ Eigen::SparseMatrix<double> QuadMesh::energyMatrix2() {
         getIndexData(Bv_k, k_re, k_im, sk_im);
 
         // add weights to entries
-        // ij, ik
+        // ii, ij, ik
         tripletsDrift.push_back( Eigen::Triplet<double>(i_re,j_im, sj_im * drift_ij) );
         tripletsDrift.push_back( Eigen::Triplet<double>(i_im,j_re, si_im * -drift_ij) );
 
         tripletsDrift.push_back( Eigen::Triplet<double>(i_re,k_im, sk_im * drift_ik) );
         tripletsDrift.push_back( Eigen::Triplet<double>(i_im,k_re, si_im * -drift_ik) );
 
-        // ji, jk
+        // jj, ji, jk
         tripletsDrift.push_back( Eigen::Triplet<double>(j_re,i_im, si_im * drift_ji) );
         tripletsDrift.push_back( Eigen::Triplet<double>(j_im,i_re, sj_im * -drift_ji) );
 
         tripletsDrift.push_back( Eigen::Triplet<double>(j_re,k_im, sk_im * drift_jk) );
         tripletsDrift.push_back( Eigen::Triplet<double>(j_im,k_re, sj_im * -drift_jk) );
 
-        // ki, kj
+        // kk, ki, kj
         tripletsDrift.push_back( Eigen::Triplet<double>(k_re,i_im, si_im * drift_ki) );
         tripletsDrift.push_back( Eigen::Triplet<double>(k_im,i_re, sk_im * -drift_ki) );
 
         tripletsDrift.push_back( Eigen::Triplet<double>(k_re,j_im, sj_im * drift_kj) );
         tripletsDrift.push_back( Eigen::Triplet<double>(k_im,j_re, sk_im * -drift_kj) );
     }
-    Adrift.setFromTriplets(tripletsDrift.begin(), tripletsDrift.begin());
-
+    Adrift.setFromTriplets(tripletsDrift.begin(), tripletsDrift.end());
+    
     checkHermitian(Acot);
+    std::cout << "Acot symmetric" << std::endl;
     checkHermitian(AzArea);
+    std::cout << "AzArea symmetric" << std::endl;
     checkHermitian(Adrift);
+    std::cout << "Adrift symmetric" << std::endl;
     return Acot + AzArea + Adrift;
 }
 
-Eigen::SparseMatrix<double> QuadMesh::energyMatrix() {
+Eigen::SparseMatrix<double> QuadMesh::energyMatrix2() {
     // index BVertices with singular vertices coming first, then sheet 0 and sheet 1 vertices
     //size_t iSingular = 0;
     //size_t iNonSingular = numSingularities;
@@ -1488,7 +1418,7 @@ void QuadMesh::optimizeSimpleGlobally() {
 }
 
 // need to do some extra work for meshes with boundary
-void QuadMesh::optimizeHarmonic() {
+void QuadMesh::optimizeHarmonic(bool visualize) {
     std::cout << "Helmholz hodge decomposition..." << std::endl;
 
     // index each element
@@ -1525,6 +1455,12 @@ void QuadMesh::optimizeHarmonic() {
     // compute newOmega in vector form
     computeSigma();
     Eigen::MatrixXd newOmega(4 * mesh->nEdges(),1);
+    std::vector<EdgeData<double>> dTheta;
+    for (size_t i = 0; i < 4; i++) {
+        EdgeData<double> dThetaSheet(mesh);
+        dTheta.push_back(dThetaSheet);
+    }
+
     for (BEdge Be : allBEdges) {
         size_t i = edgeIndices[Be.sheet][Be.e];
         //newOmega(i,0) = omega[Be.sheet][Be.e];
@@ -1537,10 +1473,19 @@ void QuadMesh::optimizeHarmonic() {
         if (singularities[Bv_i.v] != 0 || singularities[Bv_j.v] != 0 || Be.e.isBoundary()) {
             newOmega(i,0) = omega[Be.sheet][Be.e];
         } else {
-            std::complex<double> psi_i = getPsi(Bv_i);
-            std::complex<double> psi_j = getPsi(Bv_j);
             newOmega(i,0) = getSigma(Be);
         }
+
+        dTheta[Be.sheet][Be.e] = newOmega(i,0);
+    }
+
+    if (visualize) {
+        polyscope::registerSurfaceMesh("post-uniformization",geom);
+        polyscope::getSurfaceMesh("post-uniformization")->addQuantity("dTheta 0", dTheta[0]);
+        polyscope::getSurfaceMesh("post-uniformization")->addQuantity("dTheta 1", dTheta[1]);
+        polyscope::getSurfaceMesh("post-uniformization")->addQuantity("dTheta 2", dTheta[2]);
+        polyscope::getSurfaceMesh("post-uniformization")->addQuantity("dTheta 3", dTheta[3]);
+        polyscope::show();
     }
 
     // compute harmonic component
@@ -1702,8 +1647,11 @@ bool QuadMesh::textureCoordinates() {
 }
 
 void QuadMesh::visualize() {
+    polyscope::registerSurfaceMesh("post-uniformization", geom);
+
     // smoothest field used to compute singularities and branch cover
-    polyscope::getSurfaceMesh()->addVectorQuantity("Smoothest Cross Field", field, 4);
+    polyscope::getSurfaceMesh("pre-uniformization")->addVectorQuantity("Smoothest Cross Field", field, 4);
+    polyscope::getSurfaceMesh("post-uniformization")->addVectorQuantity("Smoothest Cross Field", field, 4);
     
     // singularities
     VertexData<Vector3> singularityColors(mesh);
@@ -1715,34 +1663,34 @@ void QuadMesh::visualize() {
       } else if (singularities[v] != 0) {
         singularityColors[v] = Vector3{0,1,0};
       } else {
-        singularityColors[v] = Vector3{0.9,0.9,0.9};
+        singularityColors[v] = Vector3{0.75,0.75,0.75};
       }
     }
-    polyscope::getSurfaceMesh()->addColorQuantity("Singularities", singularityColors);
-    
+    polyscope::getSurfaceMesh("post-uniformization")->addColorQuantity("Singularities", singularityColors);
+
     // curvatures post-uniformization
-    polyscope::getSurfaceMesh()->addQuantity("Curvatures", curvatures);
+    polyscope::getSurfaceMesh("post-uniformization")->addQuantity("Curvatures", curvatures);
 
     // updated cross field on cone metric
-    polyscope::getSurfaceMesh()->addVectorQuantity("Smoothest Cross Field CM", fieldCM, 4);
-    polyscope::getSurfaceMesh()->addQuantity("Edge flipped", edgeFlipped);
-
+    polyscope::getSurfaceMesh("pre-uniformization")->addVectorQuantity("Smoothest Cross Field CM", fieldCM, 4);
+    polyscope::getSurfaceMesh("post-uniformization")->addVectorQuantity("Smoothest Cross Field CM", fieldCM, 4);
+    
     // cross frame on branch cover
     for (int i = 0; i < 4; i++) {
-      polyscope::getSurfaceMesh()->addVectorQuantity("Branch Cover Field " + std::to_string(i), branchCoverFields[i], 1);
+      polyscope::getSurfaceMesh("post-uniformization")->addVectorQuantity("Branch Cover Field " + std::to_string(i), branchCoverFields[i], 1);
     }
 
     // errors after bfs
-    polyscope::getSurfaceMesh()->addQuantity("edge error", errors);
+    polyscope::getSurfaceMesh("post-uniformization")->addQuantity("edge error", errors);
 
-    polyscope::getSurfaceMesh()->addVectorQuantity("omega 0", omega[0]);
-    polyscope::getSurfaceMesh()->addVectorQuantity("omega 1", omega[1]);
-    polyscope::getSurfaceMesh()->addVectorQuantity("omega 2", omega[2]);
-    polyscope::getSurfaceMesh()->addVectorQuantity("omega 3", omega[3]);
+    polyscope::getSurfaceMesh("post-uniformization")->addVectorQuantity("omega 0", omega[0]);
+    polyscope::getSurfaceMesh("post-uniformization")->addVectorQuantity("omega 1", omega[1]);
+    polyscope::getSurfaceMesh("post-uniformization")->addVectorQuantity("omega 2", omega[2]);
+    polyscope::getSurfaceMesh("post-uniformization")->addVectorQuantity("omega 3", omega[3]);
     
     // direct stripe coords
-    polyscope::getSurfaceMesh()->addQuantity("X Coords", coords[0]);
-    polyscope::getSurfaceMesh()->addQuantity("Y Coords", coords[1]);
+    polyscope::getSurfaceMesh("post-uniformization")->addQuantity("X Coords", coords[0]);
+    polyscope::getSurfaceMesh("post-uniformization")->addQuantity("Y Coords", coords[1]);
 
     FaceData<std::pair<int,std::vector<Vector2>>> shaderInfo(mesh);
     for (FacePtr f : mesh->faces()) {
@@ -1750,7 +1698,7 @@ void QuadMesh::visualize() {
         int n = zeros[f];
         shaderInfo[f] = std::make_pair(n, coords);
     }
-    polyscope::getSurfaceMesh()->addQuantity("stripes shader", shaderInfo);
+    polyscope::getSurfaceMesh("post-uniformization")->addQuantity("stripes shader", shaderInfo);
 
     FaceData<Vector3> zerosColors(mesh);
     for (FacePtr f : mesh->faces()) {
@@ -1762,10 +1710,10 @@ void QuadMesh::visualize() {
         zerosColors[f] = Vector3{0,1.0,0};
       }
     }
-    polyscope::getSurfaceMesh()->addColorQuantity("New Zeros", zerosColors);  
+    polyscope::getSurfaceMesh("post-uniformization")->addColorQuantity("New Zeros", zerosColors);  
 
-    polyscope::getSurfaceMesh()->getSurfaceQuantity("stripes shader")->enabled = true;  
-    polyscope::getSurfaceMesh()->setActiveSurfaceQuantity((polyscope::SurfaceQuantityThatDrawsFaces*)polyscope::getSurfaceMesh()->getSurfaceQuantity("stripes shader"));
+    polyscope::getSurfaceMesh("post-uniformization")->getSurfaceQuantity("stripes shader")->enabled = true;  
+    polyscope::getSurfaceMesh("post-uniformization")->setActiveSurfaceQuantity((polyscope::SurfaceQuantityThatDrawsFaces*)polyscope::getSurfaceMesh("post-uniformization")->getSurfaceQuantity("stripes shader"));
 
     VertexData<double> psi_real(mesh,0);
     VertexData<double> psi_imag(mesh,0);
@@ -1773,7 +1721,7 @@ void QuadMesh::visualize() {
         psi_real[v] = psi[0][v].real();
         psi_imag[v] = psi[0][v].imag();
     }
-    polyscope::getSurfaceMesh()->addQuantity("Psi real", psi_real);
-    polyscope::getSurfaceMesh()->addQuantity("Psi imag", psi_imag);
+    polyscope::getSurfaceMesh("post-uniformization")->addQuantity("Psi real", psi_real);
+    polyscope::getSurfaceMesh("post-uniformization")->addQuantity("Psi imag", psi_imag);
 
 }

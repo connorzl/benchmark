@@ -258,7 +258,7 @@ gl::GLProgram* SurfaceScalarStripesQuantity::createProgram() {
 
 void SurfaceScalarStripesQuantity::fillColorBuffers(gl::GLProgram* p) {
   std::vector<Vector2> texCoord;
-  std::vector<float> zeroIndices;
+  std::vector<double> zeroIndices;
   for (FacePtr f : parent->mesh->faces()) { 
     std::pair<int,std::vector<Vector2>> vals = values[f];
     std::vector<Vector2> coords = vals.second;
@@ -270,7 +270,7 @@ void SurfaceScalarStripesQuantity::fillColorBuffers(gl::GLProgram* p) {
 
   // Store data in buffers
   p->setAttribute("a_texcoord", texCoord);
-  //p->setAttribute("a_n", zeroIndices);
+  p->setAttribute("a_n", zeroIndices);
 }
 
 // ========================================================
