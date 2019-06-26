@@ -59,6 +59,7 @@ endif()
 add_subdirectory(deps)
 
 ### Add things for this project
+add_definitions(-DHAVE_SUITESPARSE)
 add_subdirectory(src)
 
 ### Build the demo viewer application

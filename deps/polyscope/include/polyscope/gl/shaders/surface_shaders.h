@@ -503,22 +503,31 @@ static const FragShader VERTSTRIPES_SURFACE_FRAG_SHADER = {
       {
         vec3 color;
 
-        // for drawing isolines
-        float width = 0.1;
-        float two_pi = 2.0 * 3.14159265359;
-        float pi = 3.14159265359;
-
-        float x = Texcoord.x + pi;
-        float y = Texcoord.y + pi;
-        if ( (mod(x, two_pi)) < width || (mod(x, two_pi)) > two_pi - width ||
-             (mod(y, two_pi)) < width || (mod(y, two_pi)) > two_pi - width ) {
-            color = edgeColor(vec3(0, 0, 0));
+        if (N != 0) {
+          outputF = lightSurface(Position, Normal, vec3(1,0,0), u_lightCenter, u_lightDist, u_eye);
         } else {
-            color = edgeColor(vec3(1.0,1.0,1.0));
-        }
+          // for drawing isolines
+          float width = 0.1;
+          float pi = 3.1415926535897932384626433832795;
+          float two_pi = 2.0 * pi;
 
-        // pass color into output
-        outputF = lightSurface(Position, Normal, color, u_lightCenter, u_lightDist, u_eye);
+          float x = Texcoord.x;
+          float y = Texcoord.y;
+
+          float modX = x - two_pi * floor(x / two_pi);
+          float modY = y - two_pi * floor(y / two_pi);
+
+          if ( modX < width || modX > two_pi - width ) {
+              color = edgeColor(vec3(0, 1, 0));
+          } else if ( modY < width || modY > two_pi - width ) {
+              color = edgeColor(vec3(0, 0, 1));
+          } else {
+              color = edgeColor(vec3(1.0,1.0,1.0));
+          }
+
+          // pass color into output
+          outputF = lightSurface(Position, Normal, color, u_lightCenter, u_lightDist, u_eye);
+        }
       }
     )
 };

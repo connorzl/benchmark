@@ -39,7 +39,6 @@ class QuadMesh {
         // constants
         int nPowerIterations = 20;
         double eps = std::pow(10.,-8.);
-        int n = 4;
 
         // smoothest field quantities
         HalfedgeData<std::complex<double>> theta;
@@ -78,9 +77,11 @@ class QuadMesh {
 
         // stripes helpers
         void computeOmega(double scale);
+        void fixOmegaBranchPoints();
         Eigen::SparseMatrix<double> energyMatrix();
         Eigen::SparseMatrix<double> energyMatrix2();
         Eigen::SparseMatrix<double> massMatrix();
+        Eigen::SparseMatrix<double> linkMatrix();
 
         // stripes quantities
         std::vector<EdgeData<double>> omega;
@@ -90,11 +91,16 @@ class QuadMesh {
         std::complex<double> getPsi(BVertex Bv);
         double getSigma(BEdge Be);
         void computeSigma();
+        void computeSigma2();
+        Eigen::MatrixXd buildLocalEnergy(BFace Bf);
+        void computeIdealPsi(BVertex Bv_i, size_t i_re, size_t j_re, size_t k_re, Eigen::MatrixXd A, 
+                             std::complex<double> &psi_j, std::complex<double> &psi_k);
 
         // texture coordinates quantities
         std::vector<VertexData<std::complex<double>>> psi;
         std::vector<VertexData<double>> coords;           // these are the direct coords 
         std::vector<EdgeData<double>> sigma;
+        std::vector<HalfedgeData<double>> sigmaHe;
         FaceData<std::vector<Vector2>> texCoords;    
         FaceData<int> zeros;
 
