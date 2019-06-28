@@ -3,10 +3,13 @@
 #include <Eigen/SparseLU>
 #include <queue>
 
-QuadMesh::QuadMesh(HalfedgeMesh* m, Geometry<Euclidean>* g) : mesh(m), geom(g), theta(m), r(m), field(m),
-                                                                singularities(m), eta(m),
-                                                                edgeLengthsCM(m), thetaCM(m), rCM(m), fieldCM(m),
-                                                                cmAngles(m), cmAreas(m), curvatures(m), texCoords(m) {
+QuadMesh::QuadMesh(HalfedgeMesh* m, Geometry<Euclidean>* g, 
+                   double rot_, double scale_, bool vis_) : mesh(m), geom(g), singularities(m), texCoords(m) {
+        
+    rot = rot_;
+    scale = scale_;
+    vis = vis_;
+
     for (int i = 0; i < 4; i++) {
         FaceData<std::complex<double>> sheetField(mesh,0);
         VertexData<size_t> sheetIndices(mesh);
@@ -14,9 +17,6 @@ QuadMesh::QuadMesh(HalfedgeMesh* m, Geometry<Euclidean>* g) : mesh(m), geom(g), 
         branchCoverFields.push_back(sheetField);
         BVertexIndices.push_back(sheetIndices);
         omega.push_back(omegaSheet);
-
-        HalfedgeData<double> sheetSigmaHe(mesh);
-        sigmaHe.push_back(sheetSigmaHe);
     }
 
     for (int i = 0; i < 2; i++) {
@@ -28,510 +28,85 @@ QuadMesh::QuadMesh(HalfedgeMesh* m, Geometry<Euclidean>* g) : mesh(m), geom(g), 
         psi.push_back(sheetPsi);
         sigma.push_back(sheetSigma);
     }
+
+    generateQuadMesh();
 }
 
-void QuadMesh::setup() {
-    for (FacePtr f : mesh->faces()) {
-        // Gather elements
-        HalfedgePtr he = f.halfedge();
-        double l_jl = geom->length(he.edge());
-        double l_ij = geom->length(he.prev().edge());
-        double theta_ijl = geom->angle(he.next()); // radians
+void QuadMesh::generateQuadMesh() {
+    // first, compute cone points via globally optimal direction fields
+    GF = GodField(mesh, geom);
+    EdgeData<double> edgeLengths(mesh);
+    geom->getEdgeLengths(edgeLengths);
+    HalfedgeData<double> heAngles(mesh);
+    geom->getHalfedgeAngles(heAngles);
 
-        // Place first vertex at (0,0)
-        Vector2 j = Vector2{0,0};
-        Vector2 l = Vector2{l_jl,0};
-        Vector2 i = Vector2{cos(theta_ijl) * l_ij, sin(theta_ijl) * l_ij}; 
+    GF.computeCrossField(edgeLengths,heAngles);
+    numSingularities = GF.computeSingularities(singularities);
 
-        Vector2 jl = l - j;
-        Vector2 li = i - l;
-        Vector2 ij = j - i;
+    // next, uniformize the surface
+    U = Uniformization(mesh, geom, singularities);
+    U.uniformize();
 
-        theta[he] = std::complex<double>(jl.x,jl.y);
-        theta[he.next()] = std::complex<double>(li.x,li.y);
-        theta[he.prev()] = std::complex<double>(ij.x,ij.y);
-    }
+    // update the cross field on the surface
+    GF.computeCrossField(U.cmEdgeLengths, U.cmAngles);
+
+    // build branch cover on uniformized surface
+    BC = BranchCoverTopology(mesh, singularities);
+    BC.validateEta(U.cmEdgeVector);
+    BC.validateConnectivity();
+
+    // compute a constant cross field on the surface
+    computeCrossFieldCMBranchCover();
+    // project to edges
+    computeOmega();
+
+    // minimize stripes energy + constraints along links
+    computeStripes();
+
+    // extract texture coordinates for visualization
+    textureCoordinates();
     
-    // Compute d_ij * r_ji = -d_ji
-    for (VertexPtr v : mesh->vertices()) {
-        for (HalfedgePtr he : v.outgoingHalfedges()) {
-            if (he.edge().isBoundary()) {
-                continue;
-            }
-            std::complex<double> theta_ij = theta[he];
-            std::complex<double> theta_ji = theta[he.twin()];
-            r[he] = std::pow((-theta_ij / theta_ji), 4);
-            r[he] = r[he] / std::abs(r[he]);
-        }
-    }   
+    if (vis) {
+        visualize();
+    }
 }
 
-void QuadMesh::setupCM() {
-    // make sure that the CM edge lengths satisfy what we want for curvature
-    Eigen::MatrixXd K  = Operators::intrinsicCurvature(mesh, edgeLengthsCM);
-    VertexData<size_t> vertexIndices = mesh->getVertexIndices();
-    for (VertexPtr v : mesh->vertices()) {
-        if (v.isBoundary()) continue;
-        double C = K(vertexIndices[v],0);
-        if (singularities[v] == 0 && std::abs(C) > 1e-8) {
-            std::cout << "wrong curvature on non-singular vertex" << std::endl;
-        } else if (singularities[v] == 1 && std::abs(C - M_PI_2) > 1e-8) {
-            std::cout << "wrong curvature on +1 singular vertex" << std::endl;
-        } else if (singularities[v] == -1 && std::abs(C + M_PI_2) > 1e-8) {
-            std::cout << "wrong curvature on -1 singular vertex" << std::endl;
-        }
-    }
+void QuadMesh::updateQuadMesh(double rot_, double scale_) {
+    rot = rot_;
+    scale = scale_;
 
-    for (FacePtr f : mesh->faces()) {
-        // Gather elements
-        HalfedgePtr he = f.halfedge();
-        double l_ij = edgeLengthsCM[he.edge()];
-        double l_ki = edgeLengthsCM[he.prev().edge()];
-        double theta_ijk = cmAngles[he.next()];
+    // compute a constant cross field on the surface
+    computeCrossFieldCMBranchCover();
+    // project to edges
+    computeOmega();
 
-        // Place first vertex at (0,0)
-        Vector2 i = Vector2{0,0};
-        Vector2 j = Vector2{l_ij,0};
-        Vector2 k = Vector2{cos(theta_ijk) * l_ki, sin(theta_ijk) * l_ki}; 
+    // minimize stripes energy + constraints along links
+    computeStripes();
 
-        Vector2 ij = j - i;
-        Vector2 jk = k - j;
-        Vector2 ki = i - k;
-
-        thetaCM[he] = std::complex<double>(ij.x,ij.y);
-        thetaCM[he.next()] = std::complex<double>(jk.x,jk.y);
-        thetaCM[he.prev()] = std::complex<double>(ki.x,ki.y);
-    }
+    // extract texture coordinates for visualization
+    textureCoordinates();
     
-    // Compute d_ji * r_ij = -d_ij
-    for (VertexPtr v : mesh->vertices()) {
-        for (HalfedgePtr he : v.outgoingHalfedges()) {
-            if (he.edge().isBoundary()) continue;
-            std::complex<double> theta_ij = thetaCM[he];
-            std::complex<double> theta_ji = thetaCM[he.twin()];
-            rCM[he] = std::pow((-theta_ij / theta_ji), 4);
-            rCM[he] /= std::abs(rCM[he]);
-        }
+    if (vis) {
+        visualize();
     }
 }
 
-Eigen::SparseMatrix<std::complex<double>> QuadMesh::assembleM(bool isCM) {
-    size_t n = mesh->nFaces();
-    Eigen::SparseMatrix<std::complex<double>> M(n,n);
-    std::vector<Eigen::Triplet<std::complex<double>>> triplets;
-
-    FaceData<size_t> faceIndices = mesh->getFaceIndices();
-    for (FacePtr f : mesh->faces()) {
-        size_t i = faceIndices[f];
-        if (isCM) {
-            triplets.push_back(Eigen::Triplet<std::complex<double>>(i, i, cmAreas[f]));
-        } else {
-            triplets.push_back(Eigen::Triplet<std::complex<double>>(i, i, geom->area(f)));
-        }
-    }
-    M.setFromTriplets(triplets.begin(),triplets.end());
-    return M;
-}
-
-Eigen::SparseMatrix<std::complex<double>> QuadMesh::assembleA(bool isCM) {
-    size_t n = mesh->nFaces();
-    Eigen::SparseMatrix<std::complex<double>> A(n,n);
-    std::vector<Eigen::Triplet<std::complex<double>>> triplets;
-
-    FaceData<size_t> faceIndices = mesh->getFaceIndices();
-    for (FacePtr f : mesh->faces()) {
-        size_t i = faceIndices[f];
-        HalfedgePtr he_ij = f.halfedge();
-
-        std::complex<double> r_ij, r_jk, r_ki;
-        if (isCM) {
-            r_ij = rCM[he_ij];
-            r_jk = rCM[he_ij.next()];
-            r_ki = rCM[he_ij.prev()];
-        } else {
-            r_ij = r[he_ij];
-            r_jk = r[he_ij.next()];
-            r_ki = r[he_ij.prev()];
-        }
-
-        double sumWeight = 0;
-        double weight;
-        HalfedgePtr he = f.halfedge();
-    
-        if (!he_ij.edge().isBoundary()) {
-            if (isCM) {
-                weight = 1;//edgeLengthsCM[he_ij.edge()];
-            } else {
-                weight = 1;//geom->length(he_ij.edge());
-            }
-            sumWeight += weight;
-            size_t i_ij = faceIndices[he_ij.twin().face()];
-            triplets.push_back(Eigen::Triplet<std::complex<double>>(i,i_ij,-weight * r_ij));
-        }
-        if (!he_ij.next().edge().isBoundary()) {
-            if (isCM) {
-                weight = 1;//edgeLengthsCM[he_ij.next().edge()];
-            } else {
-                weight = 1;//geom->length(he_ij.next().edge());
-            }
-            sumWeight += weight;
-            size_t i_jk = faceIndices[he_ij.next().twin().face()];
-            triplets.push_back(Eigen::Triplet<std::complex<double>>(i,i_jk,-weight * r_jk));
-        }
-        if (!he_ij.prev().edge().isBoundary()) {
-            if (isCM) {
-                weight = 1;//edgeLengthsCM[he_ij.prev().edge()];
-            } else {
-                weight = 1;//geom->length(he_ij.prev().edge());
-            }
-            sumWeight += weight;
-            size_t i_ki = faceIndices[he_ij.prev().twin().face()];
-            triplets.push_back(Eigen::Triplet<std::complex<double>>(i,i_ki,-weight * r_ki));   
-        }
-        triplets.push_back(Eigen::Triplet<std::complex<double>>(i, i, sumWeight));
-    }
-    A.setFromTriplets(triplets.begin(),triplets.end());
-    return A;
-}
-
-void QuadMesh::computeSmoothestField(Eigen::SparseMatrix<std::complex<double>> M, Eigen::SparseMatrix<std::complex<double>> A, bool isCM) {
-    // u <- UniformRand(-1,1)
-    Eigen::MatrixXcd u = Eigen::MatrixXcd::Random(mesh->nFaces(),1);
-    Eigen::MatrixXcd x;
-
-    // inverse power iteration to find eigenvector belonging to the smallest eigenvalue
-    PositiveDefiniteSolver<std::complex<double>> s(A);
-    for (int i = 0; i < nPowerIterations; i++) {
-        Eigen::MatrixXcd rhs = M * u;
-        x = s.solve(rhs);
-
-        std::complex<double> norm2 = (x.transpose() * M * x)(0,0);
-        u = x / sqrt(norm2);
-    }
-
-    // map resulting vector to VertexData
-    FaceData<size_t> faceIndices = mesh->getFaceIndices();
-    for (FacePtr f : mesh->faces()) {
-        std::complex<double> c = u(faceIndices[f],0);
-        std::complex<double> val;
-        if (std::abs(c) == 0) {
-            val = 0;
-        } else {
-            val = c / std::abs(c);   
-        }
-        if (isCM) {
-            fieldCM[f] = val;
-        } else {
-            field[f] = val;
-        }
-    }
-} 
-
-void QuadMesh::computeCrossField(bool isCM) {
-    std::cout << "Computing Smoothest Cross Field" << std::endl;
-    if (isCM) {
-        setupCM();
-    } else {
-        setup();
-    }
-
-    // Algorithm 2 : Smoothest Field
-    Eigen::SparseMatrix<std::complex<double>> M = assembleM(isCM);
-    Eigen::SparseMatrix<std::complex<double>> A = assembleA(isCM);
-    A = A + eps * M;
-    computeSmoothestField(M,A,isCM);
-    std::cout << "Done!" << std::endl;
-}
-
-void QuadMesh::computeSingularities() {
-    std::cout << "Computing Singularities...";
-
-    // compute index for each vertex v
-    int total = 0;
-    for (VertexPtr v : mesh->vertices()) {
-        double angleSum = 0;
-
-        if (v.isBoundary()) {
-            singularities[v] = 0;
-            continue;
-        } 
-
-        for (HalfedgePtr he : v.outgoingHalfedges()) {
-            std::complex<double> u_i = field[he.face()];
-            std::complex<double> u_j = field[he.twin().face()];
-            std::complex<double> r_ji = r[he];
-            angleSum += std::arg(u_i / (r_ji * u_j));
-        }
-
-        double phi = (angleSum + 4*geom->angleDefect(v)) / (2.0 * M_PI);
-        singularities[v] = std::round(phi);
-        if (singularities[v] != 0) {
-            numSingularities++;
-        }
-        total += singularities[v];
-    }
-    std::cout << "Done! Singularities Index Sum: " << total << std::endl;
-}
-
-double QuadMesh::updateAreas() {
-    double totalArea = 0;
-    for (FacePtr f : mesh->faces()) {
-        double l_ij = edgeLengthsCM[f.halfedge().edge()       ];
-        double l_jk = edgeLengthsCM[f.halfedge().next().edge()];
-        double l_ki = edgeLengthsCM[f.halfedge().prev().edge()];
-
-        double s = (l_ij + l_jk + l_ki) / 2.0;
-        cmAreas[f] = sqrt( s * (s - l_ij) * (s - l_jk) * (s - l_ki) );
-        totalArea += cmAreas[f];
-    }
-    return totalArea;
-}
-
-// this needs to include hyperbolic edge flips
-void QuadMesh::uniformizeBoundary() {
-    std::cout << "Boundary Uniformization..." << std::endl;
-    // re-index the interior vertices starting from 0
-    // we want to omit boundary vertices from the energy and pin u to 0 
-    size_t iN = 0;
-    VertexData<size_t> vertexIndices = mesh->getVertexIndices();
-    VertexData<size_t> interiorVertexIndices(mesh);
-    Eigen::Array<bool,Eigen::Dynamic,1> interior(mesh->nVertices(),1);
-
-    for (VertexPtr v : mesh->vertices()) {
-        if (!v.isBoundary()) {
-            interiorVertexIndices[v] = iN++;
-        }
-        interior(vertexIndices[v],0) = (!v.isBoundary());
-    }
-    if (iN != mesh->nInteriorVertices()) {
-        throw std::logic_error("error indexing interior vertices!");
-    }
-    
-    // Ax = b, where A = |V| x |V| laplacian, x = |V| x 1 vertex scaling, b = |V| x 1 curvature diff K - K*
-    Eigen::MatrixXd KTarg(mesh->nInteriorVertices(),1);
-    Eigen::MatrixXd K(mesh->nInteriorVertices(),1);
-    for (VertexPtr v : mesh->vertices()) {
-        if (v.isBoundary()) continue;
-        size_t index = interiorVertexIndices[v];
-        if (singularities[v] == 0) {
-            KTarg(index,0) = 0;
-        } else if (singularities[v] == 1) {
-            KTarg(index,0) = M_PI_2;
-        } else if (singularities[v] == -1) {
-            KTarg(index,0) = -M_PI_2;
-        } else if (singularities[v] == -2) {
-            KTarg(index,0) = -M_PI;
-        } else {
-            throw std::logic_error("non +1/-1/-2 singularity");
-        }
-    }
-
-    // make mesh delaunay
-    geom->getEdgeLengths(edgeLengthsCM);
-    Operators::hyperbolicEdgeFlips(mesh, edgeLengthsCM);
-    
-    double resid = 0;
-    do {
-        Eigen::SparseMatrix<double> A_all = Operators::intrinsicLaplaceMatrix(mesh,edgeLengthsCM);
-        BlockDecompositionResult<double> B = blockDecomposeSquare(A_all, interior);
-
-        Eigen::MatrixXd K_all = Operators::intrinsicCurvature(mesh,edgeLengthsCM);
-        for (VertexPtr v : mesh->vertices()) {
-            if (v.isBoundary()) continue;
-            K(interiorVertexIndices[v],0) = K_all(vertexIndices[v],0);
-        }
-
-        Eigen::MatrixXd rhs = KTarg - K;
-        Eigen::MatrixXd x = solveSquare<double>(B.AA, rhs);
-
-        // update edge lengths
-        for (EdgePtr e : mesh->edges()) {
-            VertexPtr vi = e.halfedge().vertex();
-            VertexPtr vj = e.halfedge().twin().vertex();
-
-            double ui, uj;
-            if (vi.isBoundary()) {
-                ui = 0;
-            } else {
-                ui = x(interiorVertexIndices[vi],0);
-            }
-            if (vj.isBoundary()) {
-                uj = 0;
-            } else {
-                uj = x(interiorVertexIndices[vj],0);
-            }
-            double s = std::exp( (ui + uj) / 2 );
-            edgeLengthsCM[e] *= s;
-        }
-        
-        Operators::hyperbolicEdgeFlips(mesh, edgeLengthsCM);
-
-        // check to see if triangle inequality still holds
-        for (FacePtr f : mesh->faces()) {
-            HalfedgePtr he = f.halfedge();
-            double a = edgeLengthsCM[he.edge()];
-            double b = edgeLengthsCM[he.next().edge()];
-            double c = edgeLengthsCM[he.prev().edge()];
-            if (a > b + c || b > a + c || c > a + b) {
-                throw std::logic_error("Triangle Inequality Violated during Uniformization!");
-            }
-        }
-
-        K_all = Operators::intrinsicCurvature(mesh,edgeLengthsCM);
-        for (VertexPtr v : mesh->vertices()) {
-            if (v.isBoundary()) continue;
-            K(interiorVertexIndices[v],0) = K_all(vertexIndices[v],0);
-        }
-        resid = (KTarg - K).array().abs().maxCoeff();
-        std::cout << "Resid: " << resid << std::endl;  
-    } while (resid > 1e-12);
-
-    K = Operators::intrinsicCurvature(mesh, edgeLengthsCM);
-    // store curvatures for visualization
-    for (VertexPtr v : mesh->vertices()) {
-        curvatures[v] = K(vertexIndices[v],0);        
-    }
-
-    // update CM areas and angles
-    updateAreas();
-    cmAngles = Operators::computeAngles(mesh, edgeLengthsCM);
-    std::cout << "Done!" << std::endl;
-}
-
-void QuadMesh::uniformize() {
-    if (mesh->nBoundaryLoops() > 0) {
-        //throw std::logic_error ("not implemented for boundary meshes yet");
-        uniformizeBoundary();
-        return;
-    }
-    if (mesh->eulerCharacteristic() != 2) {
-        throw std::logic_error("non genus-0 shape");
-    }
-    std::cout << "Boundary-less Uniformization..." << std::endl;
-    VertexData<size_t> vertexIndices = mesh->getVertexIndices();
-
-    // Ax = b, where A = |V| x |V| laplacian, x = |V| x 1 vertex scaling, b = |V| x 1 curvature diff K - K*
-    Eigen::MatrixXd KTarg(mesh->nVertices(),1);
-    for (VertexPtr v : mesh->vertices()) {
-        size_t index = vertexIndices[v];
-        if (singularities[v] == 0) {
-            KTarg(index,0) = 0;
-        } else if (singularities[v] == 1) {
-            KTarg(index,0) = M_PI_2;
-        } else if (singularities[v] == -1) {
-            KTarg(index,0) = -M_PI_2;
-        } else if (singularities[v] == -2) {
-            KTarg(index,0) = -M_PI;
-        } else {
-            polyscope::warning("WEIRD SINGULARITY INDEX");
-            std::cout << "warning: singularity index " << singularities[v] << std::endl;
-            if (singularities[v] == 2) {
-                KTarg(index,0) = M_PI;
-                continue;
-            }
-            std::cout << singularities[v] << std::endl;
-            throw std::logic_error("non +1/-1/-2 singular index");
-        }
-    }
-    if (std::abs(KTarg.sum() - mesh->eulerCharacteristic() * 2.0 * M_PI) > 1e-8) {
-        throw std::logic_error("Target curvatures do not satisfy Gauss Bonnet");
-    }
-
-    // make mesh delaunay
-    geom->getEdgeLengths(edgeLengthsCM);    
-    Operators::hyperbolicEdgeFlips(mesh, edgeLengthsCM);
-
-    Eigen::SparseMatrix<double> A;
-    Eigen::MatrixXd x, K;
-    double resid = 0;
-    do {
-        A = Operators::intrinsicLaplaceMatrix(mesh,edgeLengthsCM);
-        K = Operators::intrinsicCurvature(mesh,edgeLengthsCM);
-
-        Eigen::MatrixXd rhs = KTarg - K;
-        x = solveSquare<double>(A, rhs);
-        x = x.array() - x.mean();
-
-        // update edge lengths
-        for (EdgePtr e : mesh->edges()) {
-            VertexPtr vi = e.halfedge().vertex();
-            VertexPtr vj = e.halfedge().twin().vertex();
-
-            double ui = x(vertexIndices[vi],0);
-            double uj = x(vertexIndices[vj],0);
-            double s = std::exp( (ui + uj) / 2 );
-            edgeLengthsCM[e] *= s;
-        }
-
-        // perform hyperbolic edge flips to make sure things are okay
-        Operators::hyperbolicEdgeFlips(mesh, edgeLengthsCM);
-
-        // check to see if triangle inequality still holds
-        for (FacePtr f : mesh->faces()) {
-            HalfedgePtr he = f.halfedge();
-            double a = edgeLengthsCM[he.edge()];
-            double b = edgeLengthsCM[he.next().edge()];
-            double c = edgeLengthsCM[he.prev().edge()];
-            if (a > b + c || b > a + c || c > a + b) {
-                throw std::logic_error("Triangle Inequality Violated during Uniformization!");
-            }
-        }
-
-        K = Operators::intrinsicCurvature(mesh,edgeLengthsCM);
-        resid = (KTarg - K).array().abs().maxCoeff();
-        std::cout << "Resid: " << resid << std::endl;  
-    } while (resid > 1e-12);
-
-    // store curvatures for visualization
-    for (VertexPtr v : mesh->vertices()) {
-        curvatures[v] = K(vertexIndices[v],0);        
-    }
-
-    // update CM areas and angles
-    updateAreas();
-    cmAngles = Operators::computeAngles(mesh, edgeLengthsCM);
-    std::cout << "Done!" << std::endl;
-}
-
+/* 
 void QuadMesh::computeBranchCover(bool improve) {
-    computeCrossField(true);
-
     std::cout<< "Computing Branch Cover..." << std::endl;
 
-    BC = BranchCoverTopology(mesh, singularities);
-    BC.validateConnectivity();
-    eta = BC.eta;
+    // OLD WAY OF COMPUTING IT BASED ON THE FIELD
     for (VertexPtr v : mesh->vertices()) {
-        int total = 0;
         for (HalfedgePtr he : v.outgoingHalfedges()) {
             if (he.edge().isBoundary()) {
                 eta[he] = 0;
                 continue;
             }
-            total = (total + eta[he]) % 4;
-        }
-       
-        if (singularities[v] == 1 && total != 1) {
-            std::cout << "difference at +1 singularity: " << total << std::endl;
-        } else if (singularities[v] == -1 && total != 3) {
-            std::cout << "difference at -1 singularity: " << total << std::endl;
-        } else if (singularities[v] == 0 && total != 0) {
-            std::cout << "difference at non-singularity: " << total << std::endl; 
-        }
-    }
- 
-    for (VertexPtr v : mesh->vertices()) {
-        int total = 0;
-        for (HalfedgePtr he : v.outgoingHalfedges()) {
-            if (he.edge().isBoundary()) {
-                eta[he] = 0;
-                continue;
-            }
-            std::complex<double> u_i = std::pow(fieldCM[he.face()], 1.0 / 4);
-            std::complex<double> u_j = std::pow(fieldCM[he.twin().face()], 1.0 / 4);
+            std::complex<double> u_i = std::pow(GF.field[he.face()], 1.0 / 4);
+            std::complex<double> u_j = std::pow(GF.field[he.twin().face()], 1.0 / 4);
             
-            std::complex<double> theta_ij = thetaCM[he];
-            std::complex<double> theta_ji = thetaCM[he.twin()];
+            std::complex<double> theta_ij = U.cmEdgeVector[he];
+            std::complex<double> theta_ji = U.cmEdgeVector[he.twin()];
             std::complex<double> r_ji = -theta_ij / theta_ji;
             r_ji = r_ji / std::abs(r_ji);
             double ang = std::arg(u_i / (r_ji * u_j));
@@ -540,24 +115,15 @@ void QuadMesh::computeBranchCover(bool improve) {
                 eta[he] = 0;
             } else if (ang >= M_PI_4 && ang < 3.0 * M_PI_4) {
                 eta[he] = 1;
-                total = (total + 1) % 4;
             } else if ((ang >= 3.0 * M_PI_4 && ang <= PI) || 
                        (ang < -3.0 * M_PI_4 && ang >= -PI)) {
                 eta[he] = 2;
-                total = (total + 2) % 4;
             } else {
                 if (!(ang >= -3.0 * M_PI_4 && ang < -M_PI_4)) {
                     throw std::logic_error("angle not in right range for branch cover");
                 }
                 eta[he] = 3;
-                total = (total + 3) % 4;
             }
-        }
-        if (v.isBoundary()) continue;
-        if (singularities[v] != 0 && total == 0) {
-            std::cout << "difference at singularity: " << total << std::endl;
-        } else if (singularities[v] == 0 && total != 0) {
-            std::cout << "difference at non-singularity: " << total << std::endl; 
         }
     }
     if (improve) {
@@ -589,7 +155,7 @@ void QuadMesh::computeBranchCover(bool improve) {
                         if (Nhe.twin().isReal()) {
                             eta[Nhe.twin()] = (eta[Nhe.twin()] - offset + 4) % 4;
                         }
-                        if ( (eta[Nhe] + eta[Nhe.twin()]) % 4 != 0) {
+                        if ( !Nhe.edge().isBoundary() && (eta[Nhe] + eta[Nhe.twin()]) % 4 != 0) {
                             throw std::logic_error("bad update to eta");
                         }
                     }
@@ -599,19 +165,9 @@ void QuadMesh::computeBranchCover(bool improve) {
         }
         if (count != mesh->nFaces()) throw std::logic_error("BFS did not traverse all BFaces");
     }
-/* 
-    for (EdgePtr e : mesh->edges()) {
-        HalfedgePtr he = e.halfedge();
-        HalfedgePtr he2 = he.twin();
-        if (eta[he] != BC.eta[he]) {
-            std::cout << "old: " << eta[he] << ", curr: " << BC.eta[he];
-            std::cout << ", old2: " << eta[he2] << ", curr2: " << BC.eta[he2] << std::endl;
-        }
-    }
-*/
-    //BC = BranchCoverTopology(mesh, eta, singularities);
-    //BC.validateConnectivity();
     
+    BC = BranchCoverTopology(mesh, eta, singularities);
+    BC.validateConnectivity();
 
     // Sanity check the rotations here
     std::vector<BVertex> allVertices = BC.allVertices();
@@ -624,8 +180,8 @@ void QuadMesh::computeBranchCover(bool improve) {
         BHalfedge BHe = Bv.halfedge();
         BHalfedge firstHe = BHe;
         do {
-            std::complex<double> theta_ij = thetaCM[BHe.he];
-            std::complex<double> theta_ji = thetaCM[BHe.he.twin()];
+            std::complex<double> theta_ij = U.cmEdgeVector[BHe.he];
+            std::complex<double> theta_ji = U.cmEdgeVector[BHe.he.twin()];
             std::complex<double> r_ij = -theta_ji / theta_ij;
             r_ij = r_ij / std::abs(r_ij);
             vCurr = r_ij * vCurr;
@@ -644,10 +200,12 @@ void QuadMesh::computeBranchCover(bool improve) {
             throw std::logic_error("wrong rotation around -1 singular vertex");
         }
     }
+
     std::cout << "Done!" << std::endl;
 }
+*/
 
-void QuadMesh::computeCrossFieldCMBranchCover(std::complex<double> init, double scale) {
+void QuadMesh::computeCrossFieldCMBranchCover() {
     std::cout << "Computing Cross Field CM on Branch Cover..." << std::endl;
     
     // get faces for traversing branch cover
@@ -656,16 +214,16 @@ void QuadMesh::computeCrossFieldCMBranchCover(std::complex<double> init, double 
         FaceData<std::complex<double>> sheetField(mesh,0);
         branchCoverFields[i] = sheetField;
 
-        FaceData<std::complex<double>> sheetXBasis(mesh);
-        xBasis.push_back(sheetXBasis);
+        //FaceData<std::complex<double>> sheetXBasis(mesh);
+        //xBasis.push_back(sheetXBasis);
     }
 
     // perform BFS starting on some BFace
     BFace root = allBFaces[0];
     std::map<BFace,bool> visited;
     visited[root] = true;
-    branchCoverFields[root.sheet][root.f] = init;
-    xBasis[root.sheet][root.f] = std::complex<double> (1,0);
+    branchCoverFields[root.sheet][root.f] = std::exp(IM_I * rot);
+    //xBasis[root.sheet][root.f] = std::complex<double> (1,0);
 
     std::queue<BFace> Q;
     Q.push(root);
@@ -688,26 +246,26 @@ void QuadMesh::computeCrossFieldCMBranchCover(std::complex<double> init, double 
                 Q.push(neighbor);
                 visited[neighbor] = true;
 
-                std::complex<double> theta_ij = thetaCM[BHe.he];
-                std::complex<double> theta_ji = thetaCM[BHe.he.twin()];
+                std::complex<double> theta_ij = U.cmEdgeVector[BHe.he];
+                std::complex<double> theta_ji = U.cmEdgeVector[BHe.he.twin()];
                 std::complex<double> r_ij = -theta_ji / theta_ij;
                 r_ij = r_ij / std::abs(r_ij);
 
                 branchCoverFields[neighbor.sheet][neighbor.f] = r_ij * branchCoverFields[currFace.sheet][currFace.f];
-                xBasis[neighbor.sheet][neighbor.f] = r_ij * xBasis[currFace.sheet][currFace.f];
+                //xBasis[neighbor.sheet][neighbor.f] = r_ij * xBasis[currFace.sheet][currFace.f];
                 count++;
             } 
             BHe = BHe.next();
         } while (BHe != currFace.halfedge());
         
-        // for the torus
+        // look at neighbor in the sheet above
         BFace neighbor = currFace;
         neighbor.sheet = (neighbor.sheet + 1) % 4;
         if (visited.find(neighbor) == visited.end()) {
             Q.push(neighbor);
             visited[neighbor] = true;
             branchCoverFields[neighbor.sheet][neighbor.f] = IM_I * branchCoverFields[currFace.sheet][currFace.f];
-            xBasis[neighbor.sheet][neighbor.f] = IM_I * xBasis[currFace.sheet][currFace.f];
+            //xBasis[neighbor.sheet][neighbor.f] = IM_I * xBasis[currFace.sheet][currFace.f];
             count++;
         }      
     }
@@ -721,8 +279,8 @@ void QuadMesh::computeCrossFieldCMBranchCover(std::complex<double> init, double 
         BFace Bf_ij = BHe.face();
         BFace Bf_ji = BHe.twin().face();
 
-        std::complex<double> theta_ij = thetaCM[BHe.he];
-        std::complex<double> theta_ji = thetaCM[BHe.he.twin()];
+        std::complex<double> theta_ij = U.cmEdgeVector[BHe.he];
+        std::complex<double> theta_ji = U.cmEdgeVector[BHe.he.twin()];
         std::complex<double> r_ji = -theta_ij / theta_ji;
         r_ji = r_ji / std::abs(r_ji);
 
@@ -730,12 +288,11 @@ void QuadMesh::computeCrossFieldCMBranchCover(std::complex<double> init, double 
         std::complex<double> f_ijt = r_ji * branchCoverFields[Bf_ji.sheet][Bf_ji.f];
         errors[Be.e] = std::max(errors[Be.e], std::abs(f_ijt - f_ij));
     }
-    // compute omega using field
-    computeOmega(scale);
+
     std::cout << "Done!" << std::endl;
 }
 
-void QuadMesh::computeOmega(double scale) {
+void QuadMesh::computeOmega() {
     // compute omega on each edge of the branch cover
     std::vector<BEdge> allBEdges = BC.allEdges();
     for (BEdge Be : allBEdges) {
@@ -747,7 +304,7 @@ void QuadMesh::computeOmega(double scale) {
         double boundaryScale = 1.0;
         if (he_ij.he.isReal()){
             f_ij = scale * branchCoverFields[he_ij.sheet][he_ij.face().f];
-            e_ij = thetaCM[he_ij.he];
+            e_ij = U.cmEdgeVector[he_ij.he];
         } else {
             f_ij = 0;
             e_ij = 0;
@@ -755,7 +312,7 @@ void QuadMesh::computeOmega(double scale) {
         }
         if (he_ji.he.isReal()) {
             f_ji = scale * branchCoverFields[he_ji.sheet][he_ji.face().f];
-            e_ji = -thetaCM[he_ji.he];
+            e_ji = -U.cmEdgeVector[he_ji.he];
         } else {
             f_ji = 0;
             e_ji = 0;
@@ -845,6 +402,7 @@ void QuadMesh::fixOmegaBranchPoints() {
     }
 }
 
+#if 0
 Eigen::SparseMatrix<double> QuadMesh::energyMatrix2() {
     size_t iNonSingular = 0;
     std::vector<BVertex> allBVertices = BC.allVertices();
@@ -911,10 +469,10 @@ Eigen::SparseMatrix<double> QuadMesh::energyMatrix2() {
         }
 
         // compute cotan, zArea, and drift
-        double cot_ij = 1.0 / tan(cmAngles[BHe_ij.he]);
-        double cot_jk = 1.0 / tan(cmAngles[BHe_jk.he]);
-        double cot_ki = 1.0 / tan(cmAngles[BHe_ki.he]);
-        double zArea = adjust * adjust * scale * scale * cmAreas[Bf.f];
+        double cot_ij = 1.0 / tan(U.cmAngles[BHe_ij.he]);
+        double cot_jk = 1.0 / tan(U.cmAngles[BHe_jk.he]);
+        double cot_ki = 1.0 / tan(U.cmAngles[BHe_ki.he]);
+        double zArea = adjust * adjust * scale * scale * U.cmAreas[Bf.f];
 
         std::complex<double> z = adjust * scale * branchCoverFields[Bf.sheet][Bf.f];
         std::complex<double> e_i_perp = IM_I * thetaCM[BHe_jk.he];
@@ -1016,9 +574,9 @@ Eigen::SparseMatrix<double> QuadMesh::energyMatrix2() {
         }
 
         // compute cotan
-        double cot_ij = 1.0 / tan(cmAngles[BHe_ij.he]);
-        double cot_jk = 1.0 / tan(cmAngles[BHe_jk.he]);
-        double cot_ki = 1.0 / tan(cmAngles[BHe_ki.he]);
+        double cot_ij = 1.0 / tan(U.cmAngles[BHe_ij.he]);
+        double cot_jk = 1.0 / tan(U.cmAngles[BHe_jk.he]);
+        double cot_ki = 1.0 / tan(U.cmAngles[BHe_ki.he]);
 
         // get index and sign information
         size_t i_re, i_im, j_re, j_im, k_re, k_im;
@@ -1076,7 +634,7 @@ Eigen::SparseMatrix<double> QuadMesh::energyMatrix2() {
         }
 
         // compute zArea weight
-        double zArea = adjust * adjust * scale * scale * cmAreas[Bf.f];
+        double zArea = adjust * adjust * scale * scale * U.cmAreas[Bf.f];
 
         // get index and sign information
         size_t i_re, i_im, j_re, j_im, k_re, k_im;
@@ -1189,23 +747,9 @@ Eigen::SparseMatrix<double> QuadMesh::energyMatrix2() {
    //checkHermitian(A);
    //return A;
 }
+#endif
 
 Eigen::SparseMatrix<double> QuadMesh::energyMatrix() {
-    // index BVertices with singular vertices coming first, then sheet 0 and sheet 1 vertices
-    //size_t iSingular = 0;
-    //size_t iNonSingular = numSingularities;
-    size_t iNonSingular = 0;
-    std::vector<BVertex> allBVertices = BC.allVertices();
-    for (BVertex Bv : allBVertices) {
-        if (singularities[Bv.v] != 0) {
-            //assert(Bv.sheet == BC.singularSheet);
-            //BVertexIndices[BC.singularSheet][Bv.v] = iSingular++;
-            continue;
-        } else if (Bv.sheet == 0 || Bv.sheet == 1) {
-            BVertexIndices[Bv.sheet][Bv.v] = iNonSingular++;
-        }
-    }
-
     // 1 copy of singular vertices (sheet 0) and 2 copies of nonsingular vertices (sheets 0 and 1)
     // multiply by 2 to get real DOFs rather than complex    
     size_t numNonSingular = mesh->nVertices() - numSingularities;
@@ -1224,13 +768,13 @@ Eigen::SparseMatrix<double> QuadMesh::energyMatrix() {
 
         // first check if boundary halfedges
         if (BHe.he.isReal()) {
-            cotA = 1.0 / tan(cmAngles[BHe.he]);
+            cotA = 1.0 / tan(U.cmAngles[BHe.he]);
             A = BHe.he.prev().vertex();
         } else {
             cotA = 0;
         }
         if (BHe.he.twin().isReal()) {
-            cotB = 1.0 / tan(cmAngles[BHe.twin().he]);
+            cotB = 1.0 / tan(U.cmAngles[BHe.twin().he]);
             B = BHe.twin().he.prev().vertex();
         } else {
             cotB = 0;
@@ -1342,7 +886,7 @@ Eigen::SparseMatrix<double> QuadMesh::massMatrix() {
         getIndexData(BHe.next().vertex(),        iB_re, iB_im);
         getIndexData(BHe.next().next().vertex(), iC_re, iC_im);
 
-        double area = cmAreas[Bf.f]; 
+        double area = U.cmAreas[Bf.f]; 
         
         // golurkin mass matrix
         triplets.push_back(Eigen::Triplet<double>(iA_re, iA_re, area/6.));
@@ -1380,6 +924,7 @@ Eigen::SparseMatrix<double> QuadMesh::massMatrix() {
     return M;
 }
 
+// builds the constrained least squares matrix
 Eigen::SparseMatrix<double> QuadMesh::linkMatrix() {
     size_t numNonSingular = mesh->nVertices() - numSingularities;
     size_t numPsi = 2 * (2 * numNonSingular);
@@ -1497,9 +1042,10 @@ Eigen::SparseMatrix<double> QuadMesh::linkMatrix() {
     return C;
 }
 
- /* 
+/* 
 double QuadMesh::computeStripes() {
     std::cout << "Computing Stripes..." << std::endl;
+    int nPowerIterations = 20;
     
     // build matrices for inverse power method
     Eigen::SparseMatrix<double> A = energyMatrix();
@@ -1563,15 +1109,28 @@ double QuadMesh::computeStripes() {
 }
 */
   
-double QuadMesh::computeStripes() {
-    // first, fix the psi values along each link of a branch point
+void QuadMesh::computeStripes() {
+    // index BVertices with singular vertices coming first, then sheet 0 and sheet 1 vertices
+    //size_t iSingular = 0;
+    //size_t iNonSingular = numSingularities;
+    size_t iNonSingular = 0;
     std::vector<BVertex> allBVertices = BC.allVertices();
+    for (BVertex Bv : allBVertices) {
+        if (singularities[Bv.v] != 0) {
+            //assert(Bv.sheet == BC.singularSheet);
+            //BVertexIndices[BC.singularSheet][Bv.v] = iSingular++;
+            continue;
+        } else if (Bv.sheet == 0 || Bv.sheet == 1) {
+            BVertexIndices[Bv.sheet][Bv.v] = iNonSingular++;
+        }
+    }
+
+    // first, fix the psi values along each link of a branch point
     std::vector<VertexData<int>> allLinkVertices;
     for (size_t i = 0; i < 4; i++) {
         VertexData<int>linkSheet(mesh,0);
         allLinkVertices.push_back(linkSheet);
     }
-
     for (BVertex Bv : allBVertices) {
         if (singularities[Bv.v] == 0) continue;
 
@@ -1615,11 +1174,6 @@ double QuadMesh::computeStripes() {
         }
     }
 
-    Eigen::SparseMatrix<double> A = energyMatrix();
-
-    size_t numNonSingular = mesh->nVertices() - numSingularities;
-    size_t numPsi = 2 * (2 * numNonSingular); // + numSingularities);
-
     // now just minimize the energy by computing a solve with Dirichlet boundary conditions
     size_t iN = 0;
     size_t iB = 0;
@@ -1631,7 +1185,8 @@ double QuadMesh::computeStripes() {
         interiorVertexIndices.push_back(indexSheet);
         boundaryVertexIndices.push_back(indexSheet2);
     }
-    Eigen::Array<bool,Eigen::Dynamic,1> interior(numPsi,1);
+    Eigen::SparseMatrix<double> A = energyMatrix();
+    Eigen::Array<bool,Eigen::Dynamic,1> interior(A.rows(),1);
 
     for (BVertex Bv : allBVertices) {
         if(Bv.sheet == 2 || Bv.sheet == 3) continue;
@@ -1649,10 +1204,9 @@ double QuadMesh::computeStripes() {
     BlockDecompositionResult<double> A_all = blockDecomposeSquare(A, interior);
     Eigen::SparseMatrix<double> A_II = A_all.AA;
     Eigen::SparseMatrix<double> A_IB = A_all.AB;
-    Eigen::MatrixXd x_b(2*iB,1);
-    //std::cout << A_II.rows() << "," << A_II.cols() << "," << iN << std::endl;
-    //std::cout << A_IB.rows() << "," << A_IB.cols() << "," << iB << std::endl;
 
+    // build the RHS
+    Eigen::MatrixXd x_b(2*iB,1);
     for (BVertex Bv : allBVertices) {
         if (Bv.sheet == 2 || Bv.sheet == 3) continue;
         if (singularities[Bv.v] != 0) continue;
@@ -1663,12 +1217,10 @@ double QuadMesh::computeStripes() {
             x_b(2*index+1,0) = psi_v.imag();
         }
     }
-
     Eigen::MatrixXd rhs = -A_IB * x_b;
+
+    // solve and extract result
     Eigen::MatrixXd x_i = solvePositiveDefinite<double>(A_II,rhs);
-
-    //std::cout << x_i.rows() << "," << x_i.cols() << "," << iN << std::endl;
-
     for (BVertex Bv : allBVertices) {
         if (Bv.sheet == 2 || Bv.sheet == 3) continue;
         if (singularities[Bv.v] != 0) continue;
@@ -1682,7 +1234,6 @@ double QuadMesh::computeStripes() {
             coords[Bv.sheet][Bv.v] = std::arg(psi_v);
         }
     }
-    return 0;
 }
 
 /*
@@ -1941,7 +1492,7 @@ void QuadMesh::optimizeHarmonic(bool visualize) {
 
     // compute harmonic component
     HodgeDecomposition H = HodgeDecomposition(vertexIndices, edgeIndices, faceIndices, 
-                                              BC, cmAngles, cmAreas, mesh, numSingularities);
+                                              BC, U.cmAngles, U.cmAreas, mesh, numSingularities);
     Eigen::MatrixXd gamma = H.computeHarmonicComponent(newOmega);
     
     // now update omega
@@ -2016,6 +1567,7 @@ void QuadMesh::computeSigma() {
     
 }
 
+/* 
 Eigen::MatrixXd QuadMesh::buildLocalEnergy(BFace Bf) {
     // For vertex on some sheet, returns indices to index real and imaginary parts of psi,
     // as well as sign for imaginary componenet to implement conjugate
@@ -2043,10 +1595,10 @@ Eigen::MatrixXd QuadMesh::buildLocalEnergy(BFace Bf) {
 
     // compute cotan, zArea, and drift
     double scale = 100;
-    double cot_ij = 1.0 / tan(cmAngles[BHe_ij.he]);
-    double cot_jk = 1.0 / tan(cmAngles[BHe_jk.he]);
-    double cot_ki = 1.0 / tan(cmAngles[BHe_ki.he]);
-    double zArea = scale * scale * cmAreas[Bf.f];
+    double cot_ij = 1.0 / tan(U.cmAngles[BHe_ij.he]);
+    double cot_jk = 1.0 / tan(U.cmAngles[BHe_jk.he]);
+    double cot_ki = 1.0 / tan(U.cmAngles[BHe_ki.he]);
+    double zArea = scale * scale * U.cmAreas[Bf.f];
 
     std::complex<double> z = scale * branchCoverFields[Bf.sheet][Bf.f];
     std::complex<double> e_i_perp = IM_I * thetaCM[BHe_jk.he];
@@ -2217,6 +1769,7 @@ void QuadMesh::computeSigma2() {
         }
     }
 }
+*/
 
 bool QuadMesh::textureCoordinates() {
     std::cout << "Computing texture coordinates..." << std::endl;
@@ -2423,11 +1976,9 @@ bool QuadMesh::textureCoordinates() {
 }
 
 void QuadMesh::visualize() {
-    polyscope::registerSurfaceMesh("post-uniformization", geom);
-
     // smoothest field used to compute singularities and branch cover
-    polyscope::getSurfaceMesh("pre-uniformization")->addVectorQuantity("Smoothest Cross Field", field, 4);
-    
+    polyscope::getSurfaceMesh("pre-uniformization")->addVectorQuantity("Smoothest Cross Field", GF.field, 4);
+
     // visualize singularities
     std::vector<Vector3> singularCloud_pos;
     std::vector<Vector3> singularCloud_neg;
@@ -2445,12 +1996,14 @@ void QuadMesh::visualize() {
     polyscope::registerPointCloud("-1 singularities", singularCloud_neg);
     polyscope::registerPointCloud("other singularities", singularCloud_other);
 
-    // curvatures post-uniformization
-    polyscope::getSurfaceMesh("post-uniformization")->addQuantity("Curvatures", curvatures);
+    polyscope::registerSurfaceMesh("post-uniformization", geom);
 
+    // curvatures post-uniformization
+    polyscope::getSurfaceMesh("post-uniformization")->addQuantity("Curvatures", U.cmCurvatures);
+ 
     // updated cross field on cone metric
-    polyscope::getSurfaceMesh("post-uniformization")->addVectorQuantity("Smoothest Cross Field CM", fieldCM, 4);
-    
+    polyscope::getSurfaceMesh("post-uniformization")->addVectorQuantity("Smoothest Cross Field CM", GF.field, 4);
+
     // cross frame on branch cover
     for (int i = 0; i < 4; i++) {
       polyscope::getSurfaceMesh("post-uniformization")->addVectorQuantity("Branch Cover Field " + std::to_string(i), branchCoverFields[i], 1);

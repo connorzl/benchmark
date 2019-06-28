@@ -58,6 +58,27 @@ void myCallback() {
   ImGui::End();
 }
 
+QuadMesh M;
+float rot = 0;
+float scale = 100;
+void rotScaleCallback() {
+
+  // Begin an ImGUI window
+  static bool showGui = true;
+  ImGui::Begin("Cross Field Scale and Rotation", &showGui, ImGuiWindowFlags_AlwaysAutoResize);
+  ImGui::PushItemWidth(200);
+
+  ImGui::SliderFloat("Rotation", &rot, 0, 2*M_PI);
+  ImGui::InputFloat("Scale", &scale, 0, 1000000, 3);
+  if (ImGui::Button("Update")) {
+    M.updateQuadMesh(rot,scale);
+  }
+
+  // Cleanup the ImGUI window
+  ImGui::PopItemWidth();
+  ImGui::End();
+}
+
 void writeToFile(std::ofstream &outfile, std::string path, Vector3 areaDistortion, Vector3 angleDistortion, 
                  size_t trianglesFlipped, bool globalOverlap, size_t seamLength, double numFaces) {
   std::size_t start = path.find_last_of('/');
@@ -354,24 +375,12 @@ int main(int argc, char** argv) {
     polyscope::registerSurfaceMesh("pre-uniformization", geom);
     polyscope::getSurfaceMesh("pre-uniformization")->enabled = false;
     
-    QuadMesh M = QuadMesh(mesh,geom);
-    M.computeCrossField();
-    M.computeSingularities();
-    M.uniformize();
-
-    M.computeBranchCover();
-    M.computeCrossFieldCMBranchCover();
-
-    //M.visualize();
-    //polyscope::show();
-
-    M.computeStripes();
-
-    //M.optimizeHarmonic();
-    M.textureCoordinates();
-    M.visualize();
+    double rot = 0;
+    double scale = 100;
+    M = QuadMesh(mesh,geom,rot,scale,true);
+    polyscope::state::userCallback = rotScaleCallback;
     polyscope::show();
-
+    /* 
     int iter = 0;
     while (!M.textureCoordinates()) {
       iter++;
@@ -381,7 +390,7 @@ int main(int argc, char** argv) {
     std::cout << "TOTAL ITERS: " << iter << std::endl;
     M.visualize();
     polyscope::show();
-  
+    */
     /*
     //std::ofstream outfile ("eigenvalues.txt");
     double scale = 100;//16 * PI;
