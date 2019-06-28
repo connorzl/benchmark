@@ -358,13 +358,13 @@ int main(int argc, char** argv) {
     M.computeCrossField();
     M.computeSingularities();
     M.uniformize();
-    //M.visualize();
-    //polyscope::show();
 
     M.computeBranchCover();
     M.computeCrossFieldCMBranchCover();
+
     //M.visualize();
     //polyscope::show();
+
     M.computeStripes();
 
     //M.optimizeHarmonic();
@@ -374,14 +374,9 @@ int main(int argc, char** argv) {
 
     int iter = 0;
     while (!M.textureCoordinates()) {
-      std::cout << "Optimization: " << iter << std::endl;
-      if (iter == 6) {
-        M.optimizeHarmonic(false);
-        //M.optimizeHarmonic(true);
-      } else {
-        M.optimizeHarmonic(false);  
-      }
       iter++;
+      std::cout << "Optimization: " << iter << std::endl;
+      M.optimizeHarmonic();
     }
     std::cout << "TOTAL ITERS: " << iter << std::endl;
     M.visualize();

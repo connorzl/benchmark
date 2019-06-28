@@ -511,15 +511,17 @@ static const FragShader VERTSTRIPES_SURFACE_FRAG_SHADER = {
           float pi = 3.1415926535897932384626433832795;
           float two_pi = 2.0 * pi;
 
+          float freq = pi;
+
           float x = Texcoord.x;
           float y = Texcoord.y;
 
-          float modX = x - two_pi * floor(x / two_pi);
-          float modY = y - two_pi * floor(y / two_pi);
+          float modX = x - freq * floor(x / freq);
+          float modY = y - freq * floor(y / freq);
 
-          if ( modX < width || modX > two_pi - width ) {
+          if ( modX < width || modX > freq - width ) {
               color = edgeColor(vec3(0, 1, 0));
-          } else if ( modY < width || modY > two_pi - width ) {
+          } else if ( modY < width || modY > freq - width ) {
               color = edgeColor(vec3(0, 0, 1));
           } else {
               color = edgeColor(vec3(1.0,1.0,1.0));
