@@ -12,10 +12,8 @@ QuadMesh::QuadMesh(HalfedgeMesh* m, Geometry<Euclidean>* g,
 
     for (int i = 0; i < 4; i++) {
         FaceData<std::complex<double>> sheetField(mesh,0);
-        VertexData<size_t> sheetIndices(mesh);
         EdgeData<double> omegaSheet(mesh);
         branchCoverFields.push_back(sheetField);
-        BVertexIndices.push_back(sheetIndices);
         omega.push_back(omegaSheet);
     }
 
@@ -33,6 +31,11 @@ QuadMesh::QuadMesh(HalfedgeMesh* m, Geometry<Euclidean>* g,
 }
 
 void QuadMesh::generateQuadMesh() {
+    if (mesh->nBoundaryLoops() > 0) {
+        std::cout << "warning: might be bugs for meshes with boundary" << std::endl;
+        //throw std::logic_error("not implemented for meshes with boundary");
+    }
+
     // first, compute cone points via globally optimal direction fields
     GF = GodField(mesh, geom);
     EdgeData<double> edgeLengths(mesh);
@@ -47,9 +50,6 @@ void QuadMesh::generateQuadMesh() {
     U = Uniformization(mesh, geom, singularities);
     U.uniformize();
 
-    // update the cross field on the surface
-    GF.computeCrossField(U.cmEdgeLengths, U.cmAngles);
-
     // build branch cover on uniformized surface
     BC = BranchCoverTopology(mesh, singularities);
     BC.validateEta(U.cmEdgeVector);
@@ -61,11 +61,25 @@ void QuadMesh::generateQuadMesh() {
     computeOmega();
 
     // minimize stripes energy + constraints along links
-    computeStripes();
+    if (mesh->nBoundaryLoops() > 0) {
+        //computeStripes();
+        computeStripesBoundary();
+    } else {
+        computeStripes();
+    }
 
     // extract texture coordinates for visualization
+    //optimizeHarmonic();
     textureCoordinates();
-    
+/* 
+    int iter = 0;
+    while (!textureCoordinates()) {
+      iter++;
+      std::cout << "Optimization: " << iter << std::endl;
+      optimizeHarmonic();
+    }
+    std::cout << "TOTAL ITERS: " << iter << std::endl;
+ */
     if (vis) {
         visualize();
     }
@@ -81,7 +95,11 @@ void QuadMesh::updateQuadMesh(double rot_, double scale_) {
     computeOmega();
 
     // minimize stripes energy + constraints along links
-    computeStripes();
+    if (mesh->nBoundaryLoops() > 0) {
+        computeStripesBoundary();
+    } else {
+        computeStripes();
+    }
 
     // extract texture coordinates for visualization
     textureCoordinates();
@@ -400,6 +418,8 @@ void QuadMesh::fixOmegaBranchPoints() {
  
         //std::cout << "singular index: " << singularities[Bv.v] << " num max: " << numMaxima << " num min: " << numMinima << std::endl;
     }
+
+    std::cout << "omega has right max min structure" << std::endl;
 }
 
 #if 0
@@ -796,17 +816,18 @@ Eigen::SparseMatrix<double> QuadMesh::energyMatrix() {
         auto getIndexData = [&](BVertex Bv, size_t& realInd, size_t& imagInd, double& imagSign) {
             bool v_singular = (singularities[Bv.v] != 0);
             if (v_singular) {  
+                throw std::logic_error("shouldn't be called on a singular vertex");
                 if (Bv.sheet != BC.singularSheet) throw std::logic_error("wrong sheet for singular vertex");
-                realInd = 2 * BVertexIndices[BC.singularSheet][Bv.v];    // all singularities live on a single sheet (0)
+                realInd = 2 * BC.BVertexIndices[BC.singularSheet][Bv.v];    // all singularities live on a single sheet (0)
                 imagSign = 1;
             } else if ((!v_singular && Bv.sheet == 0) || (!v_singular && Bv.sheet == 1)) {
-                realInd = 2 * BVertexIndices[Bv.sheet][Bv.v];            // sheet 0 and 1 treated as normal
+                realInd = 2 * BC.BVertexIndices[Bv.sheet][Bv.v];            // sheet 0 and 1 treated as normal
                 imagSign = 1;
             } else if (!v_singular && Bv.sheet == 2) {
-                realInd = 2 * BVertexIndices[0][Bv.v];                   // sheet 2 shares indices with sheet 0
+                realInd = 2 * BC.BVertexIndices[0][Bv.v];                   // sheet 2 shares indices with sheet 0
                 imagSign = -1;
             } else if (!v_singular && Bv.sheet == 3) {
-                realInd = 2 * BVertexIndices[1][Bv.v];                   // sheet 3 shares indices with sheet 1
+                realInd = 2 * BC.BVertexIndices[1][Bv.v];                   // sheet 3 shares indices with sheet 1
                 imagSign = -1;
             }
             imagInd = realInd+1;
@@ -857,14 +878,15 @@ Eigen::SparseMatrix<double> QuadMesh::massMatrix() {
     auto getIndexData = [&](BVertex Bv, size_t& realInd, size_t& imagInd) {
         bool v_singular = (singularities[Bv.v] != 0);
         if (v_singular) {  
+            throw std::logic_error("shouldn't be called on a singular vertex");
             if (Bv.sheet != BC.singularSheet) throw std::logic_error("wrong sheet for singular vertex");
-            realInd = 2 * BVertexIndices[BC.singularSheet][Bv.v];    // all singularities live on a single sheet (0)
+            realInd = 2 * BC.BVertexIndices[BC.singularSheet][Bv.v];    // all singularities live on a single sheet (0)
         } else if ((!v_singular && Bv.sheet == 0) || (!v_singular && Bv.sheet == 1)) {
-            realInd = 2 * BVertexIndices[Bv.sheet][Bv.v];            // sheet 0 and 1 treated as normal
+            realInd = 2 * BC.BVertexIndices[Bv.sheet][Bv.v];            // sheet 0 and 1 treated as normal
         } else if (!v_singular && Bv.sheet == 2) {
-            realInd = 2 * BVertexIndices[0][Bv.v];                   // sheet 2 shares indices with sheet 0
+            realInd = 2 * BC.BVertexIndices[0][Bv.v];                   // sheet 2 shares indices with sheet 0
         } else if (!v_singular && Bv.sheet == 3) {
-            realInd = 2 * BVertexIndices[1][Bv.v];                   // sheet 3 shares indices with sheet 1
+            realInd = 2 * BC.BVertexIndices[1][Bv.v];                   // sheet 3 shares indices with sheet 1
         }
         imagInd = realInd+1;
     };
@@ -925,6 +947,7 @@ Eigen::SparseMatrix<double> QuadMesh::massMatrix() {
 }
 
 // builds the constrained least squares matrix
+/* 
 Eigen::SparseMatrix<double> QuadMesh::linkMatrix() {
     size_t numNonSingular = mesh->nVertices() - numSingularities;
     size_t numPsi = 2 * (2 * numNonSingular);
@@ -1041,15 +1064,16 @@ Eigen::SparseMatrix<double> QuadMesh::linkMatrix() {
     C.setFromTriplets(triplets.begin(),triplets.end());
     return C;
 }
+*/
 
-/* 
-double QuadMesh::computeStripes() {
+void QuadMesh::computeStripesBoundary() {
     std::cout << "Computing Stripes..." << std::endl;
     int nPowerIterations = 20;
-    
+
     // build matrices for inverse power method
     Eigen::SparseMatrix<double> A = energyMatrix();
     Eigen::SparseMatrix<double> B = massMatrix();
+    PositiveDefiniteSolver<double> s(A);
 
     size_t numNonSingular = mesh->nVertices() - numSingularities;
     size_t numPsi = 2 * (2 * numNonSingular); // + numSingularities);
@@ -1057,18 +1081,17 @@ double QuadMesh::computeStripes() {
     Eigen::MatrixXd prevX, num, denom;
     double lambda;
 
-    Eigen::SparseMatrix<double> C = linkMatrix();
+    //Eigen::SparseMatrix<double> C = linkMatrix();
+    //Solver<double> s2(C);
 
     // inverse power iteration to find eigenvector belonging to the smallest eigenvalue
-    PositiveDefiniteSolver<double> s(A);
-    Solver<double> s2(C);
     for (int i = 0; i < nPowerIterations; i++) {
         prevX = x;
         
         Eigen::MatrixXd rhs = B * x;
         x = s.solve(rhs);
-
         // project onto the Cx = 0 constraint
+        /*
         Eigen::MatrixXd b = Eigen::MatrixXd::Zero(C.rows(),1);
         for (size_t j = 0; j < numPsi; j++) {
             b(j,0) = 2 * x(j,0);
@@ -1077,7 +1100,7 @@ double QuadMesh::computeStripes() {
         for (size_t j = 0; j < numPsi; j++) {
             x(j,0) = y(j,0);
         }
-
+        */
         // normalize result and check residual
         double norm2 = (x.transpose() * B * x)(0,0);
         x = x / std::sqrt(norm2);
@@ -1094,7 +1117,7 @@ double QuadMesh::computeStripes() {
         for (VertexPtr v : mesh->vertices()) {
             if (singularities[v] != 0) continue;
             
-            size_t index = BVertexIndices[i][v];
+            size_t index = BC.BVertexIndices[i][v];
             double real = x(2*index,  0);
             double imag = x(2*index+1,0);
             
@@ -1103,27 +1126,11 @@ double QuadMesh::computeStripes() {
             coords[i][v] = std::arg(p);
         }
     }
-
     std::cout << "Done!" << std::endl;
-    return lambda;
 }
-*/
   
 void QuadMesh::computeStripes() {
-    // index BVertices with singular vertices coming first, then sheet 0 and sheet 1 vertices
-    //size_t iSingular = 0;
-    //size_t iNonSingular = numSingularities;
-    size_t iNonSingular = 0;
-    std::vector<BVertex> allBVertices = BC.allVertices();
-    for (BVertex Bv : allBVertices) {
-        if (singularities[Bv.v] != 0) {
-            //assert(Bv.sheet == BC.singularSheet);
-            //BVertexIndices[BC.singularSheet][Bv.v] = iSingular++;
-            continue;
-        } else if (Bv.sheet == 0 || Bv.sheet == 1) {
-            BVertexIndices[Bv.sheet][Bv.v] = iNonSingular++;
-        }
-    }
+    std::cout << "Computing Stripes..." << std::endl;
 
     // first, fix the psi values along each link of a branch point
     std::vector<VertexData<int>> allLinkVertices;
@@ -1131,6 +1138,7 @@ void QuadMesh::computeStripes() {
         VertexData<int>linkSheet(mesh,0);
         allLinkVertices.push_back(linkSheet);
     }
+    std::vector<BVertex> allBVertices = BC.allVertices();
     for (BVertex Bv : allBVertices) {
         if (singularities[Bv.v] == 0) continue;
 
@@ -1197,8 +1205,8 @@ void QuadMesh::computeStripes() {
         } else {
             boundaryVertexIndices[Bv.sheet][Bv.v] = iB++;
         }
-        interior(2*BVertexIndices[Bv.sheet][Bv.v],  0) = (allLinkVertices[Bv.sheet][Bv.v] == 0);
-        interior(2*BVertexIndices[Bv.sheet][Bv.v]+1,0) = (allLinkVertices[Bv.sheet][Bv.v] == 0);
+        interior(2*BC.BVertexIndices[Bv.sheet][Bv.v],  0) = (allLinkVertices[Bv.sheet][Bv.v] == 0);
+        interior(2*BC.BVertexIndices[Bv.sheet][Bv.v]+1,0) = (allLinkVertices[Bv.sheet][Bv.v] == 0);
     }
 
     BlockDecompositionResult<double> A_all = blockDecomposeSquare(A, interior);
@@ -1479,6 +1487,9 @@ void QuadMesh::optimizeHarmonic(bool visualize) {
         }
 
         dTheta[Be.sheet][Be.e] = newOmega(i,0);
+        if (std::isnan(dTheta[Be.sheet][Be.e])) {
+            throw std::logic_error("nan value on sigma");
+        }
     }
 
     if (visualize) {
@@ -1500,6 +1511,7 @@ void QuadMesh::optimizeHarmonic(bool visualize) {
         size_t i = edgeIndices[Be.sheet][Be.e];
         omega[Be.sheet][Be.e] = gamma(i,0);
     }
+    fixOmegaBranchPoints();
     std::cout << "Done!" << std::endl;
     computeStripes();
 }
@@ -1531,14 +1543,13 @@ void QuadMesh::computeSigma() {
 
         BHalfedge BHe = Be.halfedge();
         std::complex<double> psi_i, psi_j;
+        BVertex Bv_i = BHe.vertex();
+        BVertex Bv_j = BHe.next().vertex();
+        if (singularities[Bv_i.v] != 0 ||singularities[Bv_j.v] != 0) {
+            continue;
+        } 
         psi_i = getPsi(BHe.vertex());       
         psi_j = getPsi(BHe.next().vertex());
-        if (singularities[BHe.vertex().v] != 0) {
-            psi_i = 0;         
-        } 
-        if (singularities[BHe.next().vertex().v] != 0) {
-            psi_j = 0;
-        } 
         double w_ij = omega[Be.sheet][Be.e];
 
         //double y = (w_ij + std::arg(psi_i) - std::arg(psi_j) ) / (2 * PI);
@@ -1546,7 +1557,53 @@ void QuadMesh::computeSigma() {
         //sigma[Be.sheet][Be.e] = std::arg(psi_j) - std::arg(psi_i) + 2 * PI * n_ij;
         
         double delta_ij = std::arg( (std::exp(IM_I * w_ij) * psi_i) / psi_j);
+
         sigma[Be.sheet][Be.e] = w_ij - delta_ij; 
+    }
+
+    // COMPUTE SIGMAS ON EDGES POINTING TOWARDS THE BRANCH POINT
+    std::vector<BVertex> allBVertices = BC.allVertices();
+    for (BVertex Bv : allBVertices) {
+        if (singularities[Bv.v] == 0) continue;
+
+        BHalfedge BHe = Bv.halfedge();
+        BEdge Be = BHe.edge();
+
+        // fix an initial sigma
+        if (Be.sheet == 0 || Be.sheet == 1) {
+            sigma[Be.sheet][Be.e] = omega[Be.sheet][Be.e];
+        } else if (Be.sheet == 2) {
+            sigma[0][Be.e] = -omega[Be.sheet][Be.e];
+        } else if (Be.sheet == 3) {
+            sigma[1][Be.e] = -omega[Be.sheet][Be.e];
+        }
+
+        size_t deg = Bv.v.degree();
+        for (size_t i = 0; i < 4*deg; i++) {
+            BHalfedge BHe_ij = BHe;
+            BHalfedge BHe_jk = BHe_ij.next();
+            BHalfedge BHe_ki = BHe_jk.next();
+
+            BEdge Be_ij = BHe_ij.edge();
+            BEdge Be_jk = BHe_jk.edge();
+            BEdge Be_ki = BHe_ki.edge();
+
+            int sign_ij = (Be_ij.halfedge() == BHe_ij) ? 1 : -1;
+            int sign_jk = (Be_jk.halfedge() == BHe_jk) ? 1 : -1;
+            int sign_ki = (Be_ki.halfedge() == BHe_ki) ? 1 : -1;
+
+            double sigma_ij = sign_ij * getSigma(Be_ij);
+            double sigma_jk = sign_jk * getSigma(Be_jk);
+            double sigma_ki = -sigma_ij - sigma_jk;
+            if (Be_ki.sheet == 0 || Be_ki.sheet == 1) {
+                sigma[Be_ki.sheet][Be_ki.e] = sign_ki * sigma_ki; 
+            } else if (Be_ki.sheet == 2) {
+                sigma[0][Be_ki.e] = -(sign_ki * sigma_ki);
+            } else if (Be_ki.sheet == 3) {
+                sigma[1][Be_ki.e] = -(sign_ki * sigma_ki);
+            }
+            BHe = BHe.next().next().twin();
+        }
     }
 
     /* 
@@ -1563,8 +1620,7 @@ void QuadMesh::computeSigma() {
             BHe = BHe.next().next().twin();
         }
     }
-    */
-    
+    */ 
 }
 
 /* 
@@ -1778,51 +1834,6 @@ bool QuadMesh::textureCoordinates() {
     computeSigma();
     zeros = FaceData<int>(mesh,0);
     int numNewSingularities = 0;
-
-    // COMPUTE SIGMAS ON EDGES POINTING TOWARDS THE BRANCH POINT
-    std::vector<BVertex> allBVertices = BC.allVertices();
-    for (BVertex Bv : allBVertices) {
-        if (singularities[Bv.v] == 0) continue;
-
-        BHalfedge BHe = Bv.halfedge();
-        BEdge Be = BHe.edge();
-
-        // fix an initial sigma
-        if (Be.sheet == 0 || Be.sheet == 1) {
-            sigma[Be.sheet][Be.e] = omega[Be.sheet][Be.e];
-        } else if (Be.sheet == 2) {
-            sigma[0][Be.e] = -omega[Be.sheet][Be.e];
-        } else if (Be.sheet == 3) {
-            sigma[1][Be.e] = -omega[Be.sheet][Be.e];
-        }
-
-        size_t deg = Bv.v.degree();
-        for (size_t i = 0; i < 4*deg; i++) {
-            BHalfedge BHe_ij = BHe;
-            BHalfedge BHe_jk = BHe_ij.next();
-            BHalfedge BHe_ki = BHe_jk.next();
-
-            BEdge Be_ij = BHe_ij.edge();
-            BEdge Be_jk = BHe_jk.edge();
-            BEdge Be_ki = BHe_ki.edge();
-
-            int sign_ij = (Be_ij.halfedge() == BHe_ij) ? 1 : -1;
-            int sign_jk = (Be_jk.halfedge() == BHe_jk) ? 1 : -1;
-            int sign_ki = (Be_ki.halfedge() == BHe_ki) ? 1 : -1;
-
-            double sigma_ij = sign_ij * getSigma(Be_ij);
-            double sigma_jk = sign_jk * getSigma(Be_jk);
-            double sigma_ki = -sigma_ij - sigma_jk;
-            if (Be_ki.sheet == 0 || Be_ki.sheet == 1) {
-                sigma[Be_ki.sheet][Be_ki.e] = sign_ki * sigma_ki; 
-            } else if (Be_ki.sheet == 2) {
-                sigma[0][Be_ki.e] = -(sign_ki * sigma_ki);
-            } else if (Be_ki.sheet == 3) {
-                sigma[1][Be_ki.e] = -(sign_ki * sigma_ki);
-            }
-            BHe = BHe.next().next().twin();
-        }
-    }
 
     HalfedgeData<double> xCoords(mesh,0);
     HalfedgeData<double> yCoords(mesh,0);

@@ -29,6 +29,7 @@ class QuadMesh {
         void computeCrossFieldCMBranchCover();
 
         // stripes
+        void computeStripesBoundary();
         void computeStripes();
         
         // optimization and texture coordinates
@@ -73,7 +74,6 @@ class QuadMesh {
 
         // stripes quantities
         std::vector<EdgeData<double>> omega;
-        std::vector<VertexData<size_t>> BVertexIndices;
 
         // texture coordinates helpers
         std::complex<double> getPsi(BVertex Bv);
